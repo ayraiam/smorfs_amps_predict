@@ -155,3 +155,4 @@ echo "  $OUT_LOG"
 echo "  $ERR_LOG"
 echo "Command record:"
 echo "  $CMD_LOG"
+
