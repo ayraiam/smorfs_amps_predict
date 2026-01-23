@@ -27,6 +27,13 @@ RUN_FILTERING=0
 # Optional QC checks (OFF by default)
 RUN_PORECHOP=0
 
+# Optional assembly (OFF by default)
+RUN_METAFlyE=0
+
+# Step control (default: run QC; MetaFlye only if requested)
+RUN_QC=1
+RUN_ASSEMBLY=0
+
 # Optional filtering toggles (only used if --run-filtering is set)
 DO_ADAPTER_TRIM=1
 DO_BARCODE_TRIM=1
@@ -48,6 +55,11 @@ usage() {
   echo "  --mem STR             (default: 32G)"
   echo "  --wd PATH             (default: current dir)"
   echo
+  echo "Steps:"
+  echo "  --qc-only             Run only QC (default)"
+  echo "  --metaflye-only       Run only MetaFlye array (skip QC)"
+  echo "  --qc-and-metaflye     Run QC then MetaFlye array"
+  echo
   echo "Mode:"
   echo "  --run-filtering       Enable trimming/filtering step (default: OFF; QC-only)"
   echo
@@ -68,6 +80,9 @@ usage() {
   echo "  --results-dir PATH    Output root (default: results)"
   echo
   echo "  -h, --help            Show help"
+  echo "Assembly:"
+  echo "  --run-metaflye        Run metagenome assembly with Flye --meta (default: OFF)"
+  echo
   exit 0
 }
 
@@ -79,6 +94,26 @@ while [[ $# -gt 0 ]]; do
     --mem) MEM="$2"; shift 2 ;;
     --wd) WDIR="$2"; shift 2 ;;
     --results-dir) RESULTS_DIR="$2"; shift 2 ;;
+
+    --qc-only)
+      RUN_QC=1
+      RUN_ASSEMBLY=0
+      RUN_METAFlyE=0
+      shift 1
+      ;;
+    --metaflye-only)
+      RUN_QC=0
+      RUN_ASSEMBLY=1
+      RUN_METAFlyE=1
+      shift 1
+      ;;
+    --qc-and-metaflye)
+      RUN_QC=1
+      RUN_ASSEMBLY=1
+      RUN_METAFlyE=1
+      shift 1
+      ;;
+
 
     --run-filtering) RUN_FILTERING=1; shift 1 ;;
 
@@ -93,10 +128,17 @@ while [[ $# -gt 0 ]]; do
     --min-len) MIN_LEN="$2"; shift 2 ;;
     --max-len) MAX_LEN="$2"; shift 2 ;;
 
+    --run-metaflye) RUN_METAFlyE=1; shift 1 ;;
+
     -h|--help) usage ;;
     *) echo "Unknown argument: $1"; usage ;;
   esac
 done
+
+# If user asked for MetaFlye but didn't specify steps, run QC + assembly
+if [[ "${RUN_METAFlyE}" -eq 1 && "${RUN_ASSEMBLY}" -eq 0 ]]; then
+  RUN_ASSEMBLY=1
+fi
 
 mkdir -p logs metadata
 
@@ -125,6 +167,9 @@ RUN_PWD="$(pwd)"
   echo "  RESULTS_DIR     : ${RESULTS_DIR}"
   echo "  RUN_FILTERING   : ${RUN_FILTERING}"
   echo "  RUN_PORECHOP    : ${RUN_PORECHOP}"
+  echo "  RUN_QC          : ${RUN_QC}"
+  echo "  RUN_ASSEMBLY    : ${RUN_ASSEMBLY}"
+  echo "  RUN_METAFlyE    : ${RUN_METAFlyE}"
   echo "  PARTITION/TIME  : ${PARTITION} / ${TIME}"
   echo "  CPUS/MEM        : ${CPUS} / ${MEM}"
   echo "============================================"
@@ -136,18 +181,30 @@ export MKL_NUM_THREADS="$CPUS"
 export NUMEXPR_NUM_THREADS="$CPUS"
 export PIPELINE_INVOCATION="$CMDLINE"
 
-srun \
-  --partition="$PARTITION" \
-  --nodes=1 \
-  --ntasks=1 \
-  --cpus-per-task="$CPUS" \
-  --mem="$MEM" \
-  --time="$TIME" \
-  --chdir="$WDIR" \
-  --export=ALL,THREADS="$CPUS",RESULTS_DIR="$RESULTS_DIR",RUN_FILTERING="$RUN_FILTERING",RUN_PORECHOP="$RUN_PORECHOP",DO_ADAPTER_TRIM="$DO_ADAPTER_TRIM",DO_BARCODE_TRIM="$DO_BARCODE_TRIM",DO_DEMUX="$DO_DEMUX",DO_POLY_TRIM="$DO_POLY_TRIM",DO_QUAL_LEN_FILTER="$DO_QUAL_LEN_FILTER",MIN_Q="$MIN_Q",MIN_LEN="$MIN_LEN",MAX_LEN="$MAX_LEN",PIPELINE_INVOCATION="$PIPELINE_INVOCATION" \
-  /bin/bash workflow/run_libsQC.sh \
-  >>"$OUT_LOG" \
-  2>>"$ERR_LOG"
+if [[ "${RUN_QC}" -eq 1 ]]; then
+  srun \
+    --partition="$PARTITION" \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="$CPUS" \
+    --mem="$MEM" \
+    --time="$TIME" \
+    --chdir="$WDIR" \
+    --export=ALL,THREADS="$CPUS",RESULTS_DIR="$RESULTS_DIR",RUN_FILTERING="$RUN_FILTERING",RUN_PORECHOP="$RUN_PORECHOP",RUN_METAFlyE="$RUN_METAFlyE",DO_ADAPTER_TRIM="$DO_ADAPTER_TRIM",DO_BARCODE_TRIM="$DO_BARCODE_TRIM",DO_DEMUX="$DO_DEMUX",DO_POLY_TRIM="$DO_POLY_TRIM",DO_QUAL_LEN_FILTER="$DO_QUAL_LEN_FILTER",MIN_Q="$MIN_Q",MIN_LEN="$MIN_LEN",MAX_LEN="$MAX_LEN",PIPELINE_INVOCATION="$PIPELINE_INVOCATION" \
+    /bin/bash workflow/run_libsQC.sh \
+    >>"$OUT_LOG" \
+    2>>"$ERR_LOG"
+else
+  echo ">>> Skipping QC step (RUN_QC=0)" | tee -a "$OUT_LOG" "$CMD_LOG"
+fi
+
+if [[ "${RUN_ASSEMBLY}" -eq 1 && "${RUN_METAFlyE}" -eq 1 ]]; then
+  echo ">>> Submitting MetaFlye Slurm array (1 task per FASTQ) ..."
+  PARTITION="$PARTITION" TIME="$TIME" CPUS="$CPUS" MEM="$MEM" WDIR="$WDIR" \
+  RESULTS_DIR="$RESULTS_DIR" FASTQ_DIR="data" \
+  bash workflow/submit_metaflye_array.sh
+fi
+
 
 echo ">>> Pipeline finished."
 echo "Logs:"
