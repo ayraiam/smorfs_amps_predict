@@ -16,44 +16,49 @@
 <pre>
 ABOUT
 -----
-smorfs_amps_predict is a lightweight, reproducible quality-control pipeline
-for Oxford Nanopore shotgun metagenomic FASTQ data.
+smorfs_amps_predict is a lightweight, reproducible pipeline for
+Oxford Nanopore shotgun metagenomic data, combining read-level
+quality control and scalable metagenome assembly.
 
-The pipeline focuses on read-level QC and diagnostics without modifying
-the original FASTQ files by default, making it safe for exploratory
-analysis, troubleshooting, and reporting.
+The pipeline is designed around two explicit, decoupled stages:
+  1) Read QC and diagnostics (safe, read-only by default)
+  2) Metagenome assembly using Flye (--meta), parallelized via Slurm arrays
 
-It was designed for large-scale environmental and clinical metagenome
-projects running on HPC systems with Slurm.
+This separation allows users to re-run assembly without repeating QC,
+resume partial runs, and scale large metagenome projects efficiently
+on HPC systems.
 </pre>
 
 <pre>
 STRUCTURE
 ---------
  /workflow/
-   runall.sh          - main Slurm launcher
-   run_libsQC.sh      - QC logic (FastQC, NanoPlot, NanoStat, SeqKit)
- /envs/               - exported Conda environments
- /logs/               - timestamped logs and timing information
- /metadata/           - reserved for sample / run metadata
- /data/               - input FASTQ(.gz) files (read-only)
+   runall.sh                    - main Slurm launcher (step control)
+   run_libsQC.sh                - QC logic (FastQC, NanoPlot, NanoStat, SeqKit)
+   submit_metaflye_array.sh     - submits Flye Slurm array (1 FASTQ per task)
+   metaflye_array_task.sh       - per-array-task Flye runner
+ /envs/                         - Conda environments (created on demand)
+ /logs/                         - timestamped Slurm logs
+ /metadata/                     - run metadata (e.g. FASTQ lists)
+ /data/                         - input FASTQ(.gz) files (read-only)
  /results/
-   qc_pre_filt/       - QC outputs on raw reads
-   qc_post_filt/      - QC outputs after filtering (optional)
- README.md            - this file
- LICENSE              - project license (MIT)
- CITATION.cff         - citation metadata
+   qc_pre_filt/                 - QC outputs on raw reads
+   qc_post_filt/                - QC outputs after filtering (optional)
+   assembly_metaflye/           - per-sample Flye metagenome assemblies
+ README.md                      - this file
+ LICENSE                        - project license (MIT)
+ CITATION.cff                   - citation metadata
 </pre>
 
 <pre>
 DEPENDENCIES
 ------------
- - Linux / macOS
+ - Linux
  - Bash ≥ 4
  - Conda or Mamba
  - Slurm (or compatible scheduler)
 
-Automatically installed in the pipeline environment:
+Automatically installed in pipeline environments:
  - FastQC
  - MultiQC
  - NanoPlot
@@ -62,30 +67,46 @@ Automatically installed in the pipeline environment:
  - Cutadapt
  - NanoFilt
  - Porechop
+ - Flye
 </pre>
 
 <pre>
 DESIGN PRINCIPLES
 -----------------
+ - Explicit separation of QC and assembly stages
  - QC-only by default (no FASTQ files are modified)
- - Explicit opt-in for any potentially destructive operation
- - Reproducible environments (exported YAML)
- - HPC-friendly (Slurm + srun)
- - Transparent logging and timing
+ - Assembly is opt-in and fully parallelized
+ - Reproducible Conda environments (created if missing)
+ - HPC-native design (Slurm + srun / sbatch arrays)
+ - Transparent logging, resumability, and provenance
 </pre>
 
 <pre>
 USAGE
 -----
-Place your FASTQ or FASTQ.GZ files in the `data/` directory and run:
+Place FASTQ or FASTQ.GZ files in the `data/` directory.
+
+Run the main launcher:
 
   bash workflow/runall.sh [options]
 
-By default, the pipeline:
- - Creates a Conda environment (metaQC)
- - Runs read-only QC
- - Produces summary plots and tables
- - Does NOT trim, filter, or modify reads
+By default:
+ - Only the QC stage is executed
+ - FASTQ files are never modified
+ - No assembly is performed unless explicitly requested
+</pre>
+
+<pre>
+STEP CONTROL
+------------
+The pipeline supports explicit step selection:
+
+  --qc-only             Run only QC (default behavior)
+  --metaflye-only       Run only metagenome assembly (skip QC)
+  --qc-and-metaflye     Run QC, then submit Flye assemblies
+
+This allows safe re-use of QC results and re-running assembly
+without repeating earlier steps.
 </pre>
 
 <pre>
@@ -93,21 +114,18 @@ MAIN OPTIONS
 ------------
 Resources:
   --partition STR       Slurm partition (default: short)
-  --time HH:MM:SS       Walltime (default: 04:00:00)
-  --cpus INT            CPUs per task (default: 8)
-  --mem STR             Memory (default: 32G)
-  --wd PATH             Working directory (default: current directory)
+  --time HH:MM:SS       Walltime per job/task
+  --cpus INT            CPUs per task
+  --mem STR             Memory per task
+  --wd PATH             Working directory
 
-Mode:
-  --run-filtering       Enable filtering/cleanup stage (OFF by default)
+QC diagnostics:
+  --run-porechop        Run porechop adapter/barcode diagnostics (OFF by default)
 
-QC checks:
-  --run-porechop        Run porechop adapter/barcode diagnostic checks
-                        (OFF by default)
-
-Filtering parameters (used only if --run-filtering is enabled):
+Filtering (used only if --run-filtering is enabled):
+  --run-filtering       Enable trimming/filtering stage
   --min-q INT           Mean read Q cutoff (default: 10)
-  --min-len INT         Minimum read length in bp (default: 500)
+  --min-len INT         Minimum read length (default: 500 bp)
   --max-len INT         Maximum read length (0 = disabled)
 
   --no-adapter-trim     Skip adapter trimming
@@ -133,12 +151,39 @@ results/qc_post_filt/
 </pre>
 
 <pre>
+ASSEMBLY OUTPUTS (MetaFlye)
+--------------------------
+results/assembly_metaflye/
+  <sample_1>/
+    assembly.fasta            - assembled contigs
+    assembly_info.txt         - contig stats and coverage
+    flye.log                  - Flye internal log
+  <sample_2>/
+    ...
+
+Each FASTQ file is assembled independently using Flye --meta.
+Assemblies are skipped automatically if output already exists,
+allowing safe re-runs and recovery from partial failures.
+</pre>
+
+<pre>
+PARALLELISM MODEL
+-----------------
+ - One Slurm array task per FASTQ file
+ - Each task receives its own CPUs, memory, and walltime
+ - Conda environment creation is lock-protected and occurs only once
+ - Ideal for large-scale metagenome collections
+</pre>
+
+<pre>
 LOGGING & REPRODUCIBILITY
 ------------------------
- - logs/qc_*.out / *.err      Slurm stdout/stderr
- - logs/command_*.txt         Full invocation record
- - logs/.timing.tsv           Per-step runtime profiling
- - envs/metaQC.yml            Exported Conda environment
+ - logs/qc_*.out / *.err                 QC Slurm stdout/stderr
+ - logs/metaflye_array_*_<job>_<task>.out/.err
+                                       Per-sample assembly logs
+ - logs/command_*.txt                    Full pipeline invocation
+ - metadata/metaflye_fastqs_*.list       FASTQ → array task mapping
+ - envs/                                 Conda environments (on demand)
 </pre>
 
 <pre>
@@ -148,24 +193,24 @@ EXAMPLES
 # 1) Default QC-only run (safe, read-only)
 bash workflow/runall.sh
 
-# 2) QC + porechop adapter/barcode diagnostics
+# 2) QC + porechop diagnostics
 bash workflow/runall.sh --run-porechop
 
-# 3) Increase resources
-bash workflow/runall.sh --time 06:00:00 --cpus 16 --mem 64G
+# 3) MetaFlye assembly only (skip QC)
+bash workflow/runall.sh --metaflye-only --cpus 16 --mem 64G --time 12:00:00
 
-# 4) QC-only on a specific working directory
-bash workflow/runall.sh --wd /path/to/project
+# 4) QC followed by MetaFlye assembly
+bash workflow/runall.sh --qc-and-metaflye --cpus 16 --mem 64G
 
-# 5) Enable filtering + post-QC (advanced / optional)
-bash workflow/runall.sh --run-filtering --min-q 12 --min-len 1000
+# 5) Advanced: QC + filtering + assembly
+bash workflow/runall.sh --qc-and-metaflye --run-filtering --min-q 12 --min-len 1000
 </pre>
 
 <pre>
 NOTES ON PORECHOP
 ----------------
-Porechop is used here ONLY as a diagnostic tool when --run-porechop
-is enabled. It does NOT trim reads or modify FASTQs.
+Porechop is used ONLY as a diagnostic tool when --run-porechop is enabled.
+It does NOT modify FASTQ files.
 
 This is intentional, as modern ONT basecalling software (e.g. MinKNOW)
 already removes adapters in most workflows. The porechop step helps
@@ -178,8 +223,8 @@ CITATION
 If you use this pipeline, please cite:
 
 Lobo, I. (2026).
-smorfs_amps_predict: A reproducible quality-control pipeline
-for Nanopore shotgun metagenomics.
+smorfs_amps_predict: A reproducible pipeline for quality control
+and metagenome assembly of Nanopore shotgun data.
 AY:RΔ — data and discovery in flow.
 
 See CITATION.cff for full citation metadata.
@@ -193,3 +238,4 @@ https://www.linkedin.com/company/aryaiam
 </pre>
 
 <p align="center"><sub>© 2026 AY:RΔ — data and discovery in flow</sub></p>
+
