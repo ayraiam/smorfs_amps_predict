@@ -88,6 +88,58 @@ normalize_map_to_tsv() {
   delim="$(detect_delim "$in")"
   header="$(head -n 1 "$in")"
 
+  local SAMPLE_COL_SEL="${SAMPLE_COL:-}"
+  local FASTQ_COL_SEL="${FASTQ_COL:-}"
+
+  # Helper: resolve column name -> index (1-based)
+  colname_to_idx() {
+    local name="$1"
+    awk -v FS="$delim" -v target="$(echo "$name" | tr '[:upper:]' '[:lower:]')" '
+      NR==1{
+        for(i=1;i<=NF;i++){
+          h=tolower($i)
+          gsub(/^[[:space:]]+|[[:space:]]+$/,"",h)
+          if(h==target){ print i; exit }
+        }
+      }
+    ' "$in"
+  }
+
+  # If user specified columns, use them
+  if [[ -n "$SAMPLE_COL_SEL" && -n "$FASTQ_COL_SEL" ]]; then
+    local sidx fidx
+
+    if [[ "$SAMPLE_COL_SEL" =~ ^[0-9]+$ ]]; then
+      sidx="$SAMPLE_COL_SEL"
+    else
+      sidx="$(colname_to_idx "$SAMPLE_COL_SEL")"
+    fi
+
+    if [[ "$FASTQ_COL_SEL" =~ ^[0-9]+$ ]]; then
+      fidx="$FASTQ_COL_SEL"
+    else
+      fidx="$(colname_to_idx "$FASTQ_COL_SEL")"
+    fi
+
+    [[ -n "${sidx}" ]] || die "Could not resolve SAMPLE_COL=${SAMPLE_COL_SEL} to a column index"
+    [[ -n "${fidx}" ]] || die "Could not resolve FASTQ_COL=${FASTQ_COL_SEL} to a column index"
+
+    awk -v FS="$delim" -v OFS="\t" -v s="$sidx" -v f="$fidx" '
+      NR==1{ next }  # skip header
+      {
+        sid=$s; fq=$f
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",sid)
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",fq)
+        if(sid=="" || fq=="") next
+        print sid, fq
+      }
+    ' "$in" > "$out"
+
+    [[ -s "$out" ]] || die "Normalized map is empty after using SAMPLE_COL/FASTQ_COL. Check file format."
+    return 0
+  fi
+
+  # Otherwise: auto-detect (your previous logic)
   if echo "$header" | grep -qiE 'sample' && echo "$header" | grep -qiE 'fastq|filename|file'; then
     awk -v FS="$delim" -v OFS="\t" '
       NR==1{
@@ -112,7 +164,6 @@ normalize_map_to_tsv() {
       }
     ' "$in" > "$out"
   else
-    # no header: assume col1 SampleID, col2 FASTQ
     awk -v FS="$delim" -v OFS="\t" '
       {
         sid=$1; fq=$2
