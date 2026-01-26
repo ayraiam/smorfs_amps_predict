@@ -199,12 +199,11 @@ else
 fi
 
 if [[ "${RUN_ASSEMBLY}" -eq 1 && "${RUN_METAFlyE}" -eq 1 ]]; then
-  echo ">>> Submitting MetaFlye Slurm array (1 task per FASTQ) ..."
+  echo ">>> Submitting MetaFlye Slurm array (co-assembly per SampleID) ..."
   PARTITION="$PARTITION" TIME="$TIME" CPUS="$CPUS" MEM="$MEM" WDIR="$WDIR" \
-  RESULTS_DIR="$RESULTS_DIR" FASTQ_DIR="data" \
+  RESULTS_DIR="$RESULTS_DIR" FASTQ_DIR="data" METADATA_MAP="metadata/metagenome_files.txt" \
   bash workflow/submit_metaflye_array.sh
 fi
-
 
 echo ">>> Pipeline finished."
 echo "Logs:"
