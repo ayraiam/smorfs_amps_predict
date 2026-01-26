@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # ==========================================================
 # Script: workflow/metaflye_array_task.sh
-# Purpose: Slurm array task runner: assemble ONE FASTQ using Flye --meta
+# Purpose: Slurm array task runner: co-assemble ONE SampleID using Flye --meta
 # Requires:
-#   - METAFlyE_FASTQ_LIST env var (path to list of FASTQs; 1 per line)
+#   - METAFlyE_SAMPLE_LIST env var (SampleIDs; 1 per line)
+#   - METAFlyE_SAMPLE_MAP  env var (TSV: SampleID<TAB>ABS_FASTQ)
 #   - SLURM_ARRAY_TASK_ID is set
 # Output:
-#   ${RESULTS_DIR}/assembly_metaflye/<SAMPLE>/
-# Logs:
-#   handled by sbatch --output/--error in submit script
+#   ${RESULTS_DIR}/assembly_metaflye/<SampleID>/
 # ==========================================================
 set -euo pipefail
 
@@ -21,14 +20,9 @@ ENV_PREFIX="${ENV_PREFIX_DIR}/${ENV_NAME}"
 
 ASSEMBLY_ROOT="${ASSEMBLY_ROOT:-${RESULTS_DIR}/assembly_metaflye}"
 
-# Read type: raw ONT by default (recommended unless we truly have corrected reads)
-READ_MODE="${READ_MODE:-nano-raw}"  # nano-raw | nano-hq | nano-corr (use nano-corr ONLY if externally corrected)
-
-# Optional: set MIN_OVERLAP only if we *really* want to override Flye auto-choice
+READ_MODE="${READ_MODE:-nano-raw}"  # nano-raw | nano-hq | nano-corr
 MIN_OVERLAP="${MIN_OVERLAP:-}"      # empty => do NOT pass --min-overlap
-
-# Optional: usually leave empty for metagenomes
-GENOME_SIZE="${GENOME_SIZE:-}"
+GENOME_SIZE="${GENOME_SIZE:-}"      # usually empty for metagenomes
 
 log() { echo "[$(date --iso-8601=seconds)] $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -36,13 +30,11 @@ have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 init_conda() {
   if have_cmd conda; then
-    # shellcheck disable=SC1090
     source "$(conda info --base)/etc/profile.d/conda.sh"
     return 0
   fi
   for guess in "$HOME/miniforge3" "$HOME/miniconda3" "/opt/conda"; do
     if [[ -f "${guess}/etc/profile.d/conda.sh" ]]; then
-      # shellcheck disable=SC1090
       source "${guess}/etc/profile.d/conda.sh"
       return 0
     fi
@@ -54,19 +46,16 @@ ensure_env_once() {
   init_conda
   mkdir -p "${ENV_PREFIX_DIR}" "${ASSEMBLY_ROOT}"
 
-  # Lock to avoid race conditions across array tasks
   local lockdir="${ENV_PREFIX}.lockdir"
 
   if [[ -d "${ENV_PREFIX}" ]]; then
     log "Env exists: ${ENV_PREFIX}"
   else
-    # Acquire lock (atomic mkdir)
     while ! mkdir "${lockdir}" 2>/dev/null; do
       log "Waiting for env lock..."
       sleep 5
     done
 
-    # Double-check after acquiring lock
     if [[ -d "${ENV_PREFIX}" ]]; then
       log "Env appeared while waiting. Continuing."
       rmdir "${lockdir}" || true
@@ -76,7 +65,7 @@ ensure_env_once() {
       if have_cmd mamba; then installer="mamba"; fi
 
       "${installer}" create -y -p "${ENV_PREFIX}" -c conda-forge -c bioconda \
-        flye minimap2 samtools python
+        flye minimap2 samtools pigz python
 
       log "Env created: ${ENV_PREFIX}"
       rmdir "${lockdir}" || true
@@ -85,40 +74,86 @@ ensure_env_once() {
 
   conda activate "${ENV_PREFIX}"
   have_cmd flye || die "flye not found after activating env."
+  have_cmd pigz || die "pigz not found after activating env."
   log "Flye: $(flye --version 2>/dev/null || echo 'version unavailable')"
 }
 
-pick_fastq_from_list() {
-  [[ -n "${METAFlyE_FASTQ_LIST:-}" ]] || die "METAFlyE_FASTQ_LIST env var not set"
-  [[ -f "${METAFlyE_FASTQ_LIST}" ]] || die "FASTQ list not found: ${METAFlyE_FASTQ_LIST}"
-  [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "SLURM_ARRAY_TASK_ID not set (are you running as an array task?)"
+pick_sample_from_list() {
+  [[ -n "${METAFlyE_SAMPLE_LIST:-}" ]] || die "METAFlyE_SAMPLE_LIST env var not set"
+  [[ -f "${METAFlyE_SAMPLE_LIST}" ]] || die "Sample list not found: ${METAFlyE_SAMPLE_LIST}"
+  [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "SLURM_ARRAY_TASK_ID not set"
 
-  local fq
-  fq="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${METAFlyE_FASTQ_LIST}")"
-  [[ -n "${fq}" ]] || die "No FASTQ found at line ${SLURM_ARRAY_TASK_ID} of ${METAFlyE_FASTQ_LIST}"
-  [[ -f "${fq}" ]] || die "FASTQ path does not exist: ${fq}"
-  echo "${fq}"
+  local sid
+  sid="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${METAFlyE_SAMPLE_LIST}")"
+  [[ -n "${sid}" ]] || die "No SampleID at line ${SLURM_ARRAY_TASK_ID} of ${METAFlyE_SAMPLE_LIST}"
+  echo "${sid}"
 }
 
-run_flye_one() {
-  local fq="$1"
-  local base sample outdir
+get_fastqs_for_sample() {
+  local sid="$1"
+  [[ -n "${METAFlyE_SAMPLE_MAP:-}" ]] || die "METAFlyE_SAMPLE_MAP env var not set"
+  [[ -f "${METAFlyE_SAMPLE_MAP}" ]] || die "Sample map not found: ${METAFlyE_SAMPLE_MAP}"
 
-  base="$(basename "$fq")"
-  sample="$base"
-  sample="${sample%.fastq.gz}"
-  sample="${sample%.fq.gz}"
-  sample="${sample%.fastq}"
-  sample="${sample%.fq}"
+  # Print one FASTQ per line
+  awk -v s="$sid" -F $'\t' '$1==s {print $2}' "${METAFlyE_SAMPLE_MAP}" | sed '/^$/d'
+}
 
-  outdir="${ASSEMBLY_ROOT}/${sample}"
+build_coassembly_reads() {
+  # Build a single gzipped FASTQ for this SampleID (once), from multiple library FASTQs.
+  local sid="$1"
+  local outdir="$2"
+
+  local reads_gz="${outdir}/reads.coassembly.fastq.gz"
+  local manifest="${outdir}/inputs.fastq.list"
+
+  if [[ -s "${reads_gz}" ]]; then
+    log "Co-assembly reads already exist: ${reads_gz}"
+    return 0
+  fi
+
+  mapfile -t fqs < <(get_fastqs_for_sample "$sid")
+  [[ "${#fqs[@]}" -ge 1 ]] || die "No FASTQs found in map for SampleID=${sid}"
+
+  printf "%s\n" "${fqs[@]}" > "${manifest}"
+
+  log "Building co-assembly FASTQ for SampleID=${sid}"
+  log "Input FASTQs: ${#fqs[@]}"
+  log "Manifest: ${manifest}"
+  log "Output: ${reads_gz}"
+
+  # Concatenate safely:
+  # - if *.gz => pigz -dc
+  # - else => cat
+  # and compress to one gz.
+  tmp="${reads_gz}.tmp.$$"
+  (
+    for f in "${fqs[@]}"; do
+      [[ -f "$f" ]] || die "Missing FASTQ: $f"
+      if [[ "$f" =~ \.gz$ ]]; then
+        pigz -dc "$f"
+      else
+        cat "$f"
+      fi
+    done
+  ) | pigz -p "${THREADS}" -c > "${tmp}"
+
+  mv "${tmp}" "${reads_gz}"
+  log "Co-assembly FASTQ created: ${reads_gz}"
+}
+
+run_flye_sample() {
+  local sid="$1"
+  local outdir="${ASSEMBLY_ROOT}/${sid}"
   mkdir -p "${outdir}"
 
   # Skip if already assembled
   if [[ -s "${outdir}/assembly.fasta" || -s "${outdir}/assembly.fna" ]]; then
-    log "Existing assembly found for ${sample} in ${outdir}. Skipping."
+    log "Existing assembly found for ${sid} in ${outdir}. Skipping."
     return 0
   fi
+
+  build_coassembly_reads "${sid}" "${outdir}"
+  local fq="${outdir}/reads.coassembly.fastq.gz"
 
   local -a cmd
   case "${READ_MODE}" in
@@ -130,38 +165,34 @@ run_flye_one() {
 
   cmd+=(--out-dir "${outdir}" --threads "${THREADS}")
 
-  if [[ -n "${MIN_OVERLAP}" ]]; then
-    cmd+=(--min-overlap "${MIN_OVERLAP}")
-  fi
-  if [[ -n "${GENOME_SIZE}" ]]; then
-    cmd+=(--genome-size "${GENOME_SIZE}")
-  fi
+  if [[ -n "${MIN_OVERLAP}" ]]; then cmd+=(--min-overlap "${MIN_OVERLAP}"); fi
+  if [[ -n "${GENOME_SIZE}" ]]; then cmd+=(--genome-size "${GENOME_SIZE}"); fi
 
   log "------------------------------------------------------------"
-  log "Sample : ${sample}"
-  log "Input  : ${fq}"
-  log "Outdir : ${outdir}"
-  log "Threads: ${THREADS}"
-  log "Cmd    : ${cmd[*]}"
+  log "SampleID: ${sid}"
+  log "Outdir  : ${outdir}"
+  log "Reads   : ${fq}"
+  log "Threads : ${THREADS}"
+  log "Cmd     : ${cmd[*]}"
 
   "${cmd[@]}"
-
-  log "DONE: ${sample}"
+  log "DONE: ${sid}"
 }
 
 main() {
-  log "Starting MetaFlye array task"
-  log "RESULTS_DIR : ${RESULTS_DIR}"
-  log "ASSEMBLY_ROOT: ${ASSEMBLY_ROOT}"
-  log "THREADS     : ${THREADS}"
-  log "ENV_PREFIX  : ${ENV_PREFIX}"
-  log "READ_MODE   : ${READ_MODE}"
-  log "MIN_OVERLAP : ${MIN_OVERLAP:-<auto>}"
+  log "Starting MetaFlye co-assembly array task"
+  log "RESULTS_DIR         : ${RESULTS_DIR}"
+  log "ASSEMBLY_ROOT       : ${ASSEMBLY_ROOT}"
+  log "THREADS             : ${THREADS}"
+  log "READ_MODE           : ${READ_MODE}"
+  log "MIN_OVERLAP         : ${MIN_OVERLAP:-<auto>}"
+  log "METAFlyE_SAMPLE_LIST: ${METAFlyE_SAMPLE_LIST:-<unset>}"
+  log "METAFlyE_SAMPLE_MAP : ${METAFlyE_SAMPLE_MAP:-<unset>}"
 
   ensure_env_once
 
-  fq="$(pick_fastq_from_list)"
-  run_flye_one "${fq}"
+  sid="$(pick_sample_from_list)"
+  run_flye_sample "${sid}"
 
   log "Task finished."
 }
