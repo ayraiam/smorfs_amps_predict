@@ -224,10 +224,31 @@ build_present_only_map() {
   # Detect duplicate basenames in metadata => ambiguous
   local dups
   dups="$(cut -f1 "$lut" | sort | uniq -d || true)"
-  if [[ -n "$dups" ]]; then
-    echo "ERROR: Duplicate FASTQ basenames in ${METADATA_MAP} (ambiguous mapping):" >&2
-    echo "$dups" | sed 's/^/  - /' >&2
-    echo "Fix: make FASTQ basenames unique, or use unique names in metadata." >&2
+  # Detect *truly ambiguous* basenames:
+  # same basename mapping to *different* SampleIDs.
+  # Multiple rows with the same basename for the SAME SampleID are allowed.
+  local bad
+  bad="$(
+    awk -F $'\t' '
+      {
+        bn=$1; sid=$2
+        if (bn == "" || sid == "") next
+        if (seen_bn[bn] && seen_sid[bn] != sid) {
+          ambig[bn]=1
+        }
+        seen_bn[bn]=1
+        if (!(bn in seen_sid)) seen_sid[bn]=sid
+      }
+      END {
+        for (b in ambig) print b
+      }
+    ' "$lut" || true
+  )"
+
+  if [[ -n "$bad" ]]; then
+    echo "ERROR: FASTQ basename(s) in ${METADATA_MAP} map to multiple SampleIDs (ambiguous):" >&2
+    echo "$bad" | sed 's/^/  - /' >&2
+    echo "Fix: ensure each FASTQ filename is associated with only one SampleID." >&2
     exit 1
   fi
 
