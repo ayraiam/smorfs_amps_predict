@@ -146,6 +146,8 @@ TS=$(date +%Y%m%d_%H%M%S)
 OUT_LOG="logs/qc_${TS}.out"
 ERR_LOG="logs/qc_${TS}.err"
 CMD_LOG="logs/command_${TS}.txt"
+MF_OUT_LOG="logs/metaflye_submit_${TS}.out"
+MF_ERR_LOG="logs/metaflye_submit_${TS}.err"
 
 CMDLINE="$(printf "%q " "$0" "${ORIG_ARGS[@]}")"
 RUN_TS="$(date --iso-8601=seconds)"
@@ -200,9 +202,39 @@ fi
 
 if [[ "${RUN_ASSEMBLY}" -eq 1 && "${RUN_METAFlyE}" -eq 1 ]]; then
   echo ">>> Submitting MetaFlye Slurm array (co-assembly per SampleID) ..."
+  echo ">>> MetaFlye submit logs:"
+  echo "  ${MF_OUT_LOG}"
+  echo "  ${MF_ERR_LOG}"
+
+  {
+    echo "============================================"
+    echo "MetaFlye submission (from runall.sh)"
+    echo "--------------------------------------------"
+    echo "Timestamp : $(date --iso-8601=seconds)"
+    echo "Host      : $(hostname)"
+    echo "PWD       : $(pwd)"
+    echo
+    echo "Invocation:"
+    echo "  ${CMDLINE}"
+    echo
+    echo "Env passed to submit script:"
+    echo "  PARTITION    : ${PARTITION}"
+    echo "  TIME         : ${TIME}"
+    echo "  CPUS         : ${CPUS}"
+    echo "  MEM          : ${MEM}"
+    echo "  WDIR         : ${WDIR}"
+    echo "  RESULTS_DIR  : ${RESULTS_DIR}"
+    echo "  FASTQ_DIR    : data"
+    echo "  METADATA_MAP : metadata/metagenome_files.txt"
+    echo "============================================"
+    echo
+  } >>"${MF_OUT_LOG}" 2>>"${MF_ERR_LOG}"
+
   PARTITION="$PARTITION" TIME="$TIME" CPUS="$CPUS" MEM="$MEM" WDIR="$WDIR" \
   RESULTS_DIR="$RESULTS_DIR" FASTQ_DIR="data" METADATA_MAP="metadata/metagenome_files.txt" \
-  bash workflow/submit_metaflye_array.sh
+  bash workflow/submit_metaflye_array.sh \
+    >>"${MF_OUT_LOG}" \
+    2>>"${MF_ERR_LOG}"
 fi
 
 echo ">>> Pipeline finished."
@@ -211,4 +243,7 @@ echo "  $OUT_LOG"
 echo "  $ERR_LOG"
 echo "Command record:"
 echo "  $CMD_LOG"
+echo "MetaFlye submit logs:"
+echo "  $MF_OUT_LOG"
+echo "  $MF_ERR_LOG"
 
