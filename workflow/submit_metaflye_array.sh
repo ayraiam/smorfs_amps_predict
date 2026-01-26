@@ -1,200 +1,285 @@
 #!/usr/bin/env bash
 # ==========================================================
-# Script: workflow/metaflye_array_task.sh
-# Purpose: Slurm array task runner: co-assemble ONE SampleID using Flye --meta
-# Requires:
-#   - METAFlyE_SAMPLE_LIST env var (SampleIDs; 1 per line)
-#   - METAFlyE_SAMPLE_MAP  env var (TSV: SampleID<TAB>ABS_FASTQ)
-#   - SLURM_ARRAY_TASK_ID is set
-# Output:
-#   ${RESULTS_DIR}/assembly_metaflye/<SampleID>/
+# Script: workflow/submit_metaflye_array.sh
+# Purpose: Batch-safe MetaFlye co-assembly submission.
+#   - Scans FASTQs present in FASTQ_DIR (default: data/)
+#   - For each FASTQ present, requires a SampleID mapping in METADATA_MAP
+#   - Builds a SampleID->FASTQ map for ONLY present FASTQs
+#   - Submits Slurm array: 1 task per SampleID
+#
+# Optional:
+#   --strict-metadata
+#     Also require that every FASTQ listed in METADATA_MAP exists in FASTQ_DIR.
 # ==========================================================
 set -euo pipefail
 
+PARTITION="${PARTITION:-short}"
+TIME="${TIME:-12:00:00}"
+CPUS="${CPUS:-16}"
+MEM="${MEM:-64G}"
+WDIR="${WDIR:-$PWD}"
+
+FASTQ_DIR="${FASTQ_DIR:-data}"
 RESULTS_DIR="${RESULTS_DIR:-results}"
-THREADS="${THREADS:-8}"
 
-ENV_NAME="${METAFlyE_ENV_NAME:-metaflye}"
-ENV_PREFIX_DIR="${ENV_PREFIX_DIR:-envs}"
-ENV_PREFIX="${ENV_PREFIX_DIR}/${ENV_NAME}"
+# User-provided mapping file: SampleID <-> FASTQ filename/path
+METADATA_MAP="${METADATA_MAP:-metadata/metagenome_files.txt}"
 
-ASSEMBLY_ROOT="${ASSEMBLY_ROOT:-${RESULTS_DIR}/assembly_metaflye}"
+# Optional knobs exported to tasks
+READ_MODE="${READ_MODE:-nano-raw}"     # nano-raw recommended
+MIN_OVERLAP="${MIN_OVERLAP:-}"         # empty => auto
+GENOME_SIZE="${GENOME_SIZE:-}"         # usually empty for metagenomes
 
-READ_MODE="${READ_MODE:-nano-raw}"  # nano-raw | nano-hq | nano-corr
-MIN_OVERLAP="${MIN_OVERLAP:-}"      # empty => do NOT pass --min-overlap
-GENOME_SIZE="${GENOME_SIZE:-}"      # usually empty for metagenomes
+mkdir -p logs metadata
 
-log() { echo "[$(date --iso-8601=seconds)] $*"; }
+TS="$(date +%Y%m%d_%H%M%S)"
+SAMPLE_LIST="metadata/metaflye_sampleids_${TS}.list"
+MAP_PRESENT="metadata/metaflye_sample_fastqs_${TS}.tsv"
+
+STRICT_METADATA=0
+
 die() { echo "ERROR: $*" >&2; exit 1; }
-have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-init_conda() {
-  if have_cmd conda; then
-    source "$(conda info --base)/etc/profile.d/conda.sh"
-    return 0
-  fi
-  for guess in "$HOME/miniforge3" "$HOME/miniconda3" "/opt/conda"; do
-    if [[ -f "${guess}/etc/profile.d/conda.sh" ]]; then
-      source "${guess}/etc/profile.d/conda.sh"
-      return 0
-    fi
-  done
-  die "conda not found. Load conda module or add conda to PATH."
+usage() {
+  cat <<EOF
+Usage:
+  bash workflow/submit_metaflye_array.sh [--strict-metadata]
+
+Batch-safe default behavior:
+  1) Scan FASTQs present in FASTQ_DIR (${FASTQ_DIR})
+  2) For each FASTQ present, look up its SampleID in METADATA_MAP (${METADATA_MAP})
+  3) If a FASTQ in FASTQ_DIR is missing from metadata -> ERROR (likely typo/missing row)
+  4) Ignore metadata rows for FASTQs not present yet (supports running in batches)
+
+Options:
+  --strict-metadata
+    Also require that every FASTQ listed in METADATA_MAP exists in FASTQ_DIR.
+
+EOF
+  exit 0
 }
 
-ensure_env_once() {
-  init_conda
-  mkdir -p "${ENV_PREFIX_DIR}" "${ASSEMBLY_ROOT}"
-
-  local lockdir="${ENV_PREFIX}.lockdir"
-
-  if [[ -d "${ENV_PREFIX}" ]]; then
-    log "Env exists: ${ENV_PREFIX}"
-  else
-    while ! mkdir "${lockdir}" 2>/dev/null; do
-      log "Waiting for env lock..."
-      sleep 5
-    done
-
-    if [[ -d "${ENV_PREFIX}" ]]; then
-      log "Env appeared while waiting. Continuing."
-      rmdir "${lockdir}" || true
-    else
-      log "Creating conda env at: ${ENV_PREFIX}"
-      local installer="conda"
-      if have_cmd mamba; then installer="mamba"; fi
-
-      "${installer}" create -y -p "${ENV_PREFIX}" -c conda-forge -c bioconda \
-        flye minimap2 samtools pigz python
-
-      log "Env created: ${ENV_PREFIX}"
-      rmdir "${lockdir}" || true
-    fi
-  fi
-
-  conda activate "${ENV_PREFIX}"
-  have_cmd flye || die "flye not found after activating env."
-  have_cmd pigz || die "pigz not found after activating env."
-  log "Flye: $(flye --version 2>/dev/null || echo 'version unavailable')"
-}
-
-pick_sample_from_list() {
-  [[ -n "${METAFlyE_SAMPLE_LIST:-}" ]] || die "METAFlyE_SAMPLE_LIST env var not set"
-  [[ -f "${METAFlyE_SAMPLE_LIST}" ]] || die "Sample list not found: ${METAFlyE_SAMPLE_LIST}"
-  [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "SLURM_ARRAY_TASK_ID not set"
-
-  local sid
-  sid="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${METAFlyE_SAMPLE_LIST}")"
-  [[ -n "${sid}" ]] || die "No SampleID at line ${SLURM_ARRAY_TASK_ID} of ${METAFlyE_SAMPLE_LIST}"
-  echo "${sid}"
-}
-
-get_fastqs_for_sample() {
-  local sid="$1"
-  [[ -n "${METAFlyE_SAMPLE_MAP:-}" ]] || die "METAFlyE_SAMPLE_MAP env var not set"
-  [[ -f "${METAFlyE_SAMPLE_MAP}" ]] || die "Sample map not found: ${METAFlyE_SAMPLE_MAP}"
-
-  # Print one FASTQ per line
-  awk -v s="$sid" -F $'\t' '$1==s {print $2}' "${METAFlyE_SAMPLE_MAP}" | sed '/^$/d'
-}
-
-build_coassembly_reads() {
-  # Build a single gzipped FASTQ for this SampleID (once), from multiple library FASTQs.
-  local sid="$1"
-  local outdir="$2"
-
-  local reads_gz="${outdir}/reads.coassembly.fastq.gz"
-  local manifest="${outdir}/inputs.fastq.list"
-
-  if [[ -s "${reads_gz}" ]]; then
-    log "Co-assembly reads already exist: ${reads_gz}"
-    return 0
-  fi
-
-  mapfile -t fqs < <(get_fastqs_for_sample "$sid")
-  [[ "${#fqs[@]}" -ge 1 ]] || die "No FASTQs found in map for SampleID=${sid}"
-
-  printf "%s\n" "${fqs[@]}" > "${manifest}"
-
-  log "Building co-assembly FASTQ for SampleID=${sid}"
-  log "Input FASTQs: ${#fqs[@]}"
-  log "Manifest: ${manifest}"
-  log "Output: ${reads_gz}"
-
-  # Concatenate safely:
-  # - if *.gz => pigz -dc
-  # - else => cat
-  # and compress to one gz.
-  tmp="${reads_gz}.tmp.$$"
-  (
-    for f in "${fqs[@]}"; do
-      [[ -f "$f" ]] || die "Missing FASTQ: $f"
-      if [[ "$f" =~ \.gz$ ]]; then
-        pigz -dc "$f"
-      else
-        cat "$f"
-      fi
-    done
-  ) | pigz -p "${THREADS}" -c > "${tmp}"
-
-  mv "${tmp}" "${reads_gz}"
-  log "Co-assembly FASTQ created: ${reads_gz}"
-}
-
-run_flye_sample() {
-  local sid="$1"
-  local outdir="${ASSEMBLY_ROOT}/${sid}"
-  mkdir -p "${outdir}"
-
-  # Skip if already assembled
-  if [[ -s "${outdir}/assembly.fasta" || -s "${outdir}/assembly.fna" ]]; then
-    log "Existing assembly found for ${sid} in ${outdir}. Skipping."
-    return 0
-  fi
-
-  build_coassembly_reads "${sid}" "${outdir}"
-  local fq="${outdir}/reads.coassembly.fastq.gz"
-
-  local -a cmd
-  case "${READ_MODE}" in
-    nano-raw) cmd=(flye --meta --nano-raw "${fq}") ;;
-    nano-hq)  cmd=(flye --meta --nano-hq  "${fq}") ;;
-    nano-corr) cmd=(flye --meta --nano-corr "${fq}") ;;
-    *) die "Unknown READ_MODE=${READ_MODE}. Use nano-raw|nano-hq|nano-corr" ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --strict-metadata) STRICT_METADATA=1; shift 1 ;;
+    -h|--help) usage ;;
+    *) die "Unknown argument: $1 (try --help)" ;;
   esac
+done
 
-  cmd+=(--out-dir "${outdir}" --threads "${THREADS}")
-
-  if [[ -n "${MIN_OVERLAP}" ]]; then cmd+=(--min-overlap "${MIN_OVERLAP}"); fi
-  if [[ -n "${GENOME_SIZE}" ]]; then cmd+=(--genome-size "${GENOME_SIZE}"); fi
-
-  log "------------------------------------------------------------"
-  log "SampleID: ${sid}"
-  log "Outdir  : ${outdir}"
-  log "Reads   : ${fq}"
-  log "Threads : ${THREADS}"
-  log "Cmd     : ${cmd[*]}"
-
-  "${cmd[@]}"
-  log "DONE: ${sid}"
+detect_delim() {
+  local f="$1"
+  if head -n 1 "$f" | grep -q $'\t'; then
+    echo $'\t'
+  elif head -n 1 "$f" | grep -q ','; then
+    echo ','
+  else
+    echo ' '
+  fi
 }
 
-main() {
-  log "Starting MetaFlye co-assembly array task"
-  log "RESULTS_DIR         : ${RESULTS_DIR}"
-  log "ASSEMBLY_ROOT       : ${ASSEMBLY_ROOT}"
-  log "THREADS             : ${THREADS}"
-  log "READ_MODE           : ${READ_MODE}"
-  log "MIN_OVERLAP         : ${MIN_OVERLAP:-<auto>}"
-  log "METAFlyE_SAMPLE_LIST: ${METAFlyE_SAMPLE_LIST:-<unset>}"
-  log "METAFlyE_SAMPLE_MAP : ${METAFlyE_SAMPLE_MAP:-<unset>}"
+normalize_map_to_tsv() {
+  # Normalized output: SampleID<TAB>FASTQ_FIELD (as provided)
+  local in="$1"
+  local out="$2"
+  [[ -f "$in" ]] || die "Metadata map not found: $in"
 
-  ensure_env_once
+  local delim header
+  delim="$(detect_delim "$in")"
+  header="$(head -n 1 "$in")"
 
-  sid="$(pick_sample_from_list)"
-  run_flye_sample "${sid}"
+  if echo "$header" | grep -qiE 'sample' && echo "$header" | grep -qiE 'fastq|filename|file'; then
+    awk -v FS="$delim" -v OFS="\t" '
+      NR==1{
+        for(i=1;i<=NF;i++){
+          h=tolower($i)
+          gsub(/^[[:space:]]+|[[:space:]]+$/,"",h)
+          if(h ~ /^sampleid$/ || h ~ /sample/){ s=i }
+          if(h ~ /fastq/ || h ~ /filename/ || h ~ /^file$/){ f=i }
+        }
+        if(!s || !f){
+          print "ERROR: Could not find SampleID/FASTQ columns in header" > "/dev/stderr"
+          exit 2
+        }
+        next
+      }
+      {
+        sid=$s; fq=$f
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",sid)
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",fq)
+        if(sid=="" || fq=="") next
+        print sid, fq
+      }
+    ' "$in" > "$out"
+  else
+    # no header: assume col1 SampleID, col2 FASTQ
+    awk -v FS="$delim" -v OFS="\t" '
+      {
+        sid=$1; fq=$2
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",sid)
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",fq)
+        if(sid=="" || fq=="") next
+        print sid, fq
+      }
+    ' "$in" > "$out"
+  fi
 
-  log "Task finished."
+  [[ -s "$out" ]] || die "Normalized map is empty (check $in)"
 }
 
-main "$@"
+list_fastqs_present_abs() {
+  # Absolute paths for FASTQs currently present in FASTQ_DIR
+  local -a files=()
+  shopt -s nullglob
+  files+=( "${FASTQ_DIR}"/*.fastq "${FASTQ_DIR}"/*.fastq.gz "${FASTQ_DIR}"/*.fq "${FASTQ_DIR}"/*.fq.gz )
+  shopt -u nullglob
+
+  [[ "${#files[@]}" -gt 0 ]] || die "No FASTQ files found in ${FASTQ_DIR}/"
+
+  for f in "${files[@]}"; do
+    if [[ "$f" = /* ]]; then
+      echo "$f"
+    else
+      echo "${WDIR}/${f}"
+    fi
+  done | sort -V
+}
+
+build_present_only_map() {
+  # Output: SampleID<TAB>ABS_FASTQ for FASTQs present now
+  # Enforce:
+  #   - Every FASTQ present must be in metadata (else error)
+  # Optional strict:
+  #   - Every metadata FASTQ must exist in FASTQ_DIR (else error)
+  local norm_map="$1"
+  local out="$2"
+
+  : > "$out"
+
+  # LUT: basename -> SampleID, plus keep original fq field for debug
+  local lut="metadata/.tmp_lut_${TS}.tsv"
+  awk -F $'\t' -v OFS="\t" '
+    {
+      sid=$1; fq=$2
+      gsub(/^[[:space:]]+|[[:space:]]+$/,"",sid)
+      gsub(/^[[:space:]]+|[[:space:]]+$/,"",fq)
+      if(sid=="" || fq=="") next
+      bn=fq
+      sub(/^.*\//,"",bn)
+      print bn, sid, fq
+    }
+  ' "$norm_map" > "$lut"
+
+  # Detect duplicate basenames in metadata => ambiguous
+  local dups
+  dups="$(cut -f1 "$lut" | sort | uniq -d || true)"
+  if [[ -n "$dups" ]]; then
+    echo "ERROR: Duplicate FASTQ basenames in ${METADATA_MAP} (ambiguous mapping):" >&2
+    echo "$dups" | sed 's/^/  - /' >&2
+    echo "Fix: make FASTQ basenames unique, or use unique names in metadata." >&2
+    exit 1
+  fi
+
+  local present_count=0 mapped_count=0
+  local -a missing=()
+
+  while IFS= read -r absf; do
+    present_count=$((present_count+1))
+    bn="$(basename "$absf")"
+
+    sid="$(awk -F $'\t' -v b="$bn" '$1==b {print $2; exit}' "$lut")"
+    if [[ -z "${sid}" ]]; then
+      missing+=( "$bn" )
+      continue
+    fi
+
+    mapped_count=$((mapped_count+1))
+    echo -e "${sid}\t${absf}" >> "$out"
+  done < <(list_fastqs_present_abs)
+
+  # If any FASTQ present has no metadata mapping => hard fail (typo/missing row)
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "ERROR: FASTQ file(s) present in ${FASTQ_DIR}/ but missing from ${METADATA_MAP}:" >&2
+    for m in "${missing[@]}"; do echo "  - ${m}" >&2; done
+    echo >&2
+    echo "Likely causes: typo in filename, missing metadata row, wrong delimiter, or wrong column." >&2
+    exit 1
+  fi
+
+  [[ -s "$out" ]] || die "No FASTQs mapped after scanning ${FASTQ_DIR}/"
+
+  # Strict mode: metadata should not contain FASTQs that aren't present in FASTQ_DIR
+  if [[ "${STRICT_METADATA}" -eq 1 ]]; then
+    local present_basenames="metadata/.tmp_present_basenames_${TS}.txt"
+    local meta_basenames="metadata/.tmp_meta_basenames_${TS}.txt"
+
+    list_fastqs_present_abs | awk -F/ '{print $NF}' | sort -u > "$present_basenames"
+    cut -f1 "$lut" | sort -u > "$meta_basenames"
+
+    local not_present
+    not_present="$(comm -23 "$meta_basenames" "$present_basenames" || true)"
+    if [[ -n "$not_present" ]]; then
+      echo "ERROR (--strict-metadata): metadata lists FASTQ(s) not present in ${FASTQ_DIR}/:" >&2
+      echo "$not_present" | sed 's/^/  - /' >&2
+      exit 1
+    fi
+  fi
+
+  rm -f "$lut" "metadata/.tmp_present_basenames_${TS}.txt" "metadata/.tmp_meta_basenames_${TS}.txt" 2>/dev/null || true
+}
+
+build_sample_list() {
+  local map="$1"
+  local out="$2"
+  cut -f1 "$map" | sort -u > "$out"
+  [[ -s "$out" ]] || die "Sample list is empty"
+}
+
+submit_array() {
+  local sample_list="$1"
+  local map_file="$2"
+
+  local n fastq_n
+  n="$(wc -l < "$sample_list" | tr -d ' ')"
+  fastq_n="$(wc -l < "$map_file" | tr -d ' ')"
+  [[ "$n" -ge 1 ]] || die "No SampleIDs to submit"
+
+  echo "MetaFlye submission summary: FASTQs_present=${fastq_n} | SampleIDs=${n} | array_tasks=${n} | strict=${STRICT_METADATA}"
+  echo "Sample list: ${sample_list}"
+  echo "Sample->FASTQ map (present only): ${map_file}"
+
+  local OUT_LOG="logs/metaflye_array_${TS}.%A_%a.out"
+  local ERR_LOG="logs/metaflye_array_${TS}.%A_%a.err"
+
+  local jid
+  jid="$(
+    sbatch \
+      --partition="${PARTITION}" \
+      --time="${TIME}" \
+      --cpus-per-task="${CPUS}" \
+      --mem="${MEM}" \
+      --chdir="${WDIR}" \
+      --job-name="metaflye" \
+      --array="1-${n}" \
+      --output="${OUT_LOG}" \
+      --error="${ERR_LOG}" \
+      --export=ALL,THREADS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",METAFlyE_SAMPLE_LIST="${sample_list}",METAFlyE_SAMPLE_MAP="${map_file}",READ_MODE="${READ_MODE}",MIN_OVERLAP="${MIN_OVERLAP}",GENOME_SIZE="${GENOME_SIZE}" \
+      workflow/metaflye_array_task.sh \
+      | awk '{print $4}'
+  )"
+
+  echo "Submitted MetaFlye array job: ${jid}"
+  echo "Per-task logs:"
+  echo "  ${OUT_LOG}"
+  echo "  ${ERR_LOG}"
+}
+
+# --------------------------- Main ---------------------------
+TMP_NORM="metadata/.tmp_norm_${TS}.tsv"
+
+normalize_map_to_tsv "${METADATA_MAP}" "${TMP_NORM}"
+build_present_only_map "${TMP_NORM}" "${MAP_PRESENT}"
+rm -f "${TMP_NORM}" || true
+
+build_sample_list "${MAP_PRESENT}" "${SAMPLE_LIST}"
+submit_array "${SAMPLE_LIST}" "${MAP_PRESENT}"
