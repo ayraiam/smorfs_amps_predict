@@ -17,16 +17,16 @@
 ABOUT
 -----
 smorfs_amps_predict is a lightweight, reproducible pipeline for
-Oxford Nanopore shotgun metagenomic data, combining read-level
-quality control and scalable metagenome assembly.
+Oxford Nanopore shotgun metagenomic data, providing a robust backbone
+for downstream smORF and antimicrobial peptide (AMP) discovery.
 
-The pipeline is designed around two explicit, decoupled stages:
-  1) Read QC and diagnostics (safe, read-only by default)
-  2) Metagenome assembly using Flye (--meta), parallelized via Slurm arrays
+The pipeline combines:
+  1) Read-level quality control and diagnostics (safe, read-only by default)
+  2) Scalable metagenome assembly using Flye (--meta), parallelized via Slurm arrays
 
-This separation allows users to re-run assembly without repeating QC,
-resume partial runs, and scale large metagenome projects efficiently
-on HPC systems.
+QC and assembly are explicitly decoupled, allowing users to re-run
+assembly without repeating QC, resume partial runs, and efficiently
+scale large metagenome collections on HPC systems.
 </pre>
 
 <pre>
@@ -35,11 +35,14 @@ STRUCTURE
  /workflow/
    runall.sh                    - main Slurm launcher (step control)
    run_libsQC.sh                - QC logic (FastQC, NanoPlot, NanoStat, SeqKit)
-   submit_metaflye_array.sh     - submits Flye Slurm array (1 FASTQ per task)
-   metaflye_array_task.sh       - per-array-task Flye runner
+   submit_metaflye_array.sh     - submits Flye Slurm array (1 SampleID per task; co-assembly)
+   metaflye_array_task.sh       - per-array-task Flye runner (co-assembly)
  /envs/                         - Conda environments (created on demand)
  /logs/                         - timestamped Slurm logs
- /metadata/                     - run metadata (e.g. FASTQ lists)
+ /metadata/
+   metagenome_files.txt         - SampleID ↔ FASTQ mapping (user-provided)
+   metaflye_sampleids_*.list    - SampleID → array task mapping
+   metaflye_sample_fastqs_*.tsv - SampleID ↔ FASTQ map (absolute paths, normalized)
  /data/                         - input FASTQ(.gz) files (read-only)
  /results/
    qc_pre_filt/                 - QC outputs on raw reads
@@ -76,6 +79,7 @@ DESIGN PRINCIPLES
  - Explicit separation of QC and assembly stages
  - QC-only by default (no FASTQ files are modified)
  - Assembly is opt-in and fully parallelized
+ - Co-assembly is performed per biological sample (SampleID)
  - Reproducible Conda environments (created if missing)
  - HPC-native design (Slurm + srun / sbatch arrays)
  - Transparent logging, resumability, and provenance
@@ -85,6 +89,18 @@ DESIGN PRINCIPLES
 USAGE
 -----
 Place FASTQ or FASTQ.GZ files in the `data/` directory.
+
+Provide a mapping file at:
+  metadata/metagenome_files.txt
+
+This file must associate each FASTQ file with a SampleID.
+It can be tab-, comma-, or space-delimited, with or without a header.
+
+Example:
+  SampleID    FASTQ_Filename
+  S01         lib1.fastq.gz
+  S01         lib2.fastq.gz
+  S02         lib3.fastq.gz
 
 Run the main launcher:
 
@@ -154,14 +170,18 @@ results/qc_post_filt/
 ASSEMBLY OUTPUTS (MetaFlye)
 --------------------------
 results/assembly_metaflye/
-  <sample_1>/
-    assembly.fasta            - assembled contigs
-    assembly_info.txt         - contig stats and coverage
-    flye.log                  - Flye internal log
-  <sample_2>/
-    ...
+  <SampleID>/
+    reads.coassembly.fastq.gz  - concatenated reads used for co-assembly
+    inputs.fastq.list          - FASTQs included in the co-assembly
+    assembly.fasta             - assembled contigs
+    assembly_info.txt          - contig stats and coverage
+    flye.log                   - Flye internal log
+  ...
 
-Each FASTQ file is assembled independently using Flye --meta.
+Reads are co-assembled per SampleID: all FASTQs mapped to the same
+SampleID (via metadata/metagenome_files.txt) are concatenated and
+assembled using Flye --meta.
+
 Assemblies are skipped automatically if output already exists,
 allowing safe re-runs and recovery from partial failures.
 </pre>
@@ -169,21 +189,37 @@ allowing safe re-runs and recovery from partial failures.
 <pre>
 PARALLELISM MODEL
 -----------------
- - One Slurm array task per FASTQ file
+ - One Slurm array task per SampleID
+ - Each task concatenates that SampleID’s FASTQs into a single
+   co-assembly input and runs Flye
  - Each task receives its own CPUs, memory, and walltime
  - Conda environment creation is lock-protected and occurs only once
- - Ideal for large-scale metagenome collections
+ - Designed for large-scale metagenome collections
 </pre>
 
 <pre>
 LOGGING & REPRODUCIBILITY
 ------------------------
- - logs/qc_*.out / *.err                 QC Slurm stdout/stderr
+ - logs/qc_*.out / *.err
+     QC Slurm stdout/stderr
+
  - logs/metaflye_array_*_<job>_<task>.out/.err
-                                       Per-sample assembly logs
- - logs/command_*.txt                    Full pipeline invocation
- - metadata/metaflye_fastqs_*.list       FASTQ → array task mapping
- - envs/                                 Conda environments (on demand)
+     Per-sample assembly logs
+
+ - logs/command_*.txt
+     Full pipeline invocation
+
+ - metadata/metagenome_files.txt
+     User-provided SampleID ↔ FASTQ mapping
+
+ - metadata/metaflye_sampleids_*.list
+     SampleID → Slurm array task mapping
+
+ - metadata/metaflye_sample_fastqs_*.tsv
+     Normalized SampleID ↔ FASTQ map (absolute paths)
+
+ - envs/
+     Conda environments (created on demand)
 </pre>
 
 <pre>
@@ -196,13 +232,13 @@ bash workflow/runall.sh
 # 2) QC + porechop diagnostics
 bash workflow/runall.sh --run-porechop
 
-# 3) MetaFlye assembly only (skip QC)
+# 3) MetaFlye co-assembly only (skip QC)
 bash workflow/runall.sh --metaflye-only --cpus 16 --mem 64G --time 12:00:00
 
-# 4) QC followed by MetaFlye assembly
+# 4) QC followed by MetaFlye co-assembly
 bash workflow/runall.sh --qc-and-metaflye --cpus 16 --mem 64G
 
-# 5) Advanced: QC + filtering + assembly
+# 5) Advanced: QC + filtering + co-assembly
 bash workflow/runall.sh --qc-and-metaflye --run-filtering --min-q 12 --min-len 1000
 </pre>
 
