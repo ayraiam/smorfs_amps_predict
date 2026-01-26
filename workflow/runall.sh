@@ -232,9 +232,11 @@ if [[ "${RUN_ASSEMBLY}" -eq 1 && "${RUN_METAFlyE}" -eq 1 ]]; then
 
   PARTITION="$PARTITION" TIME="$TIME" CPUS="$CPUS" MEM="$MEM" WDIR="$WDIR" \
   RESULTS_DIR="$RESULTS_DIR" FASTQ_DIR="data" METADATA_MAP="metadata/metagenome_files.txt" \
+  SAMPLE_COL="SampleID" FASTQ_COL="FASTQ_Filename" \
   bash workflow/submit_metaflye_array.sh \
     >>"${MF_OUT_LOG}" \
     2>>"${MF_ERR_LOG}"
+
 fi
 
 echo ">>> Pipeline finished."
