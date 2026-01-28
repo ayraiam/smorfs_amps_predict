@@ -45,6 +45,8 @@ MIN_Q="10"
 MIN_LEN="500"
 MAX_LEN="0"
 
+BATCH_ID="batch1"
+
 usage() {
   echo "Usage: bash workflow/runall.sh [options]"
   echo
@@ -83,6 +85,9 @@ usage() {
   echo "Assembly:"
   echo "  --run-metaflye        Run metagenome assembly with Flye --meta (default: OFF)"
   echo
+  echo "Batch:"
+  echo "  --batch-id STR        Batch identifier for NanoPlot/NanoStat labeling (default: batch1)"
+  echo
   exit 0
 }
 
@@ -114,6 +119,7 @@ while [[ $# -gt 0 ]]; do
       shift 1
       ;;
 
+    --batch-id) BATCH_ID="$2"; shift 2 ;;
 
     --run-filtering) RUN_FILTERING=1; shift 1 ;;
 
@@ -166,6 +172,7 @@ RUN_PWD="$(pwd)"
   echo "  ${CMDLINE}"
   echo
   echo "Resolved settings:"
+  echo "  BATCH_ID       : ${BATCH_ID}"
   echo "  RESULTS_DIR     : ${RESULTS_DIR}"
   echo "  RUN_FILTERING   : ${RUN_FILTERING}"
   echo "  RUN_PORECHOP    : ${RUN_PORECHOP}"
@@ -192,7 +199,7 @@ if [[ "${RUN_QC}" -eq 1 ]]; then
     --mem="$MEM" \
     --time="$TIME" \
     --chdir="$WDIR" \
-    --export=ALL,THREADS="$CPUS",RESULTS_DIR="$RESULTS_DIR",RUN_FILTERING="$RUN_FILTERING",RUN_PORECHOP="$RUN_PORECHOP",RUN_METAFlyE="$RUN_METAFlyE",DO_ADAPTER_TRIM="$DO_ADAPTER_TRIM",DO_BARCODE_TRIM="$DO_BARCODE_TRIM",DO_DEMUX="$DO_DEMUX",DO_POLY_TRIM="$DO_POLY_TRIM",DO_QUAL_LEN_FILTER="$DO_QUAL_LEN_FILTER",MIN_Q="$MIN_Q",MIN_LEN="$MIN_LEN",MAX_LEN="$MAX_LEN",PIPELINE_INVOCATION="$PIPELINE_INVOCATION" \
+    --export=ALL,THREADS="$CPUS",RESULTS_DIR="$RESULTS_DIR",BATCH_ID="$BATCH_ID",RUN_FILTERING="$RUN_FILTERING",RUN_PORECHOP="$RUN_PORECHOP",RUN_METAFlyE="$RUN_METAFlyE",DO_ADAPTER_TRIM="$DO_ADAPTER_TRIM",DO_BARCODE_TRIM="$DO_BARCODE_TRIM",DO_DEMUX="$DO_DEMUX",DO_POLY_TRIM="$DO_POLY_TRIM",DO_QUAL_LEN_FILTER="$DO_QUAL_LEN_FILTER",MIN_Q="$MIN_Q",MIN_LEN="$MIN_LEN",MAX_LEN="$MAX_LEN",PIPELINE_INVOCATION="$PIPELINE_INVOCATION" \
     /bin/bash workflow/run_libsQC.sh \
     >>"$OUT_LOG" \
     2>>"$ERR_LOG"
