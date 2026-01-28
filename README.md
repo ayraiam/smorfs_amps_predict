@@ -27,6 +27,9 @@ The pipeline combines:
 QC and assembly are explicitly decoupled, allowing users to re-run
 assembly without repeating QC, resume partial runs, and efficiently
 scale large metagenome collections on HPC systems.
+
+QC diagnostics are batch-aware, enabling direct comparison of
+multiple sequencing batches without overwriting results.
 </pre>
 
 <pre>
@@ -45,8 +48,8 @@ STRUCTURE
    metaflye_sample_fastqs_*.tsv - SampleID ↔ FASTQ map (absolute paths, normalized)
  /data/                         - input FASTQ(.gz) files (read-only)
  /results/
-   qc_pre_filt/                 - QC outputs on raw reads
-   qc_post_filt/                - QC outputs after filtering (optional)
+   qc_pre_filt/                 - QC outputs on raw reads (batch-aware)
+   qc_post_filt/                - QC outputs after filtering (optional; batch-aware)
    assembly_metaflye/           - per-sample Flye metagenome assemblies
  README.md                      - this file
  LICENSE                        - project license (MIT)
@@ -83,6 +86,27 @@ DESIGN PRINCIPLES
  - Reproducible Conda environments (created if missing)
  - HPC-native design (Slurm + srun / sbatch arrays)
  - Transparent logging, resumability, and provenance
+ - Batch-aware QC for multi-run and longitudinal projects
+
+</pre>
+
+<pre>
+BATCH AWARE QC
+--------------
+The QC stage supports explicit batch labeling via a user-defined
+batch identifier.
+
+This enables:
+ - Direct comparison of multiple sequencing batches
+ - Preservation of independent NanoPlot / NanoStat outputs
+ - Safe re-analysis without overwriting previous QC results
+
+Batch labeling affects:
+ - NanoPlot outputs
+ - NanoStat summaries
+ - SeqKit read statistics
+
+No FASTQ files are ever modified.
 </pre>
 
 <pre>
@@ -105,6 +129,9 @@ Example:
 Run the main launcher:
 
   bash workflow/runall.sh [options]
+
+Optionally, specify a batch identifier to keep QC outputs from
+different sequencing runs separate.
 
 By default:
  - Only the QC stage is executed
@@ -149,21 +176,34 @@ Filtering (used only if --run-filtering is enabled):
   --demux               Enable demultiplexing
   --no-poly-trim        Skip poly-A/T trimming
   --no-filter           Skip NanoFilt Q/length filtering
+
+Batch control:
+  --batch-id STR        Batch identifier for QC outputs
+                        (default: batch1)
+
 </pre>
 
 <pre>
 QC OUTPUTS
 ----------
 results/qc_pre_filt/
-  fastqc/                     - per-file FastQC reports
-  multiqc/                    - aggregated MultiQC report
-  nanoplot/raw/               - read length & quality distributions
-  nanostat/raw/               - per-sample NanoStat summaries
-  summary/                    - SeqKit read statistics
-  adapter_barcode_checks/     - porechop diagnostics (if enabled)
+  fastqc/                         - per-file FastQC reports
+  multiqc/                        - aggregated MultiQC report
+
+  nanoplot/<batch>_raw/           - read length & quality distributions
+  nanostat/<batch>_raw/           - per-file NanoStat summaries
+  summary/
+    seqkit_stats_<batch>_raw.tsv  - SeqKit read statistics
+
+  adapter_barcode_checks/         - porechop diagnostics (if enabled)
 
 results/qc_post_filt/
-  (same structure, only if filtering is enabled)
+  nanoplot/<batch>_clean/
+  nanostat/<batch>_clean/
+  summary/
+    seqkit_stats_<batch>_clean.tsv
+
+Where <batch> corresponds to the value provided via --batch-id.
 </pre>
 
 <pre>
@@ -229,17 +269,22 @@ EXAMPLES
 # 1) Default QC-only run (safe, read-only)
 bash workflow/runall.sh
 
-# 2) QC + porechop diagnostics
-bash workflow/runall.sh --run-porechop
+# 2) QC-only run with explicit batch labeling
+bash workflow/runall.sh --batch-id batch1
 
-# 3) MetaFlye co-assembly only (skip QC)
+# 3) QC + porechop diagnostics (batch-aware)
+bash workflow/runall.sh --run-porechop --batch-id batch2
+
+# 4) MetaFlye co-assembly only (skip QC)
 bash workflow/runall.sh --metaflye-only --cpus 16 --mem 64G --time 12:00:00
 
-# 4) QC followed by MetaFlye co-assembly
-bash workflow/runall.sh --qc-and-metaflye --cpus 16 --mem 64G
+# 5) QC followed by MetaFlye co-assembly
+bash workflow/runall.sh --qc-and-metaflye --batch-id batch1 --cpus 16 --mem 64G
 
-# 5) Advanced: QC + filtering + co-assembly
-bash workflow/runall.sh --qc-and-metaflye --run-filtering --min-q 12 --min-len 1000
+# 6) Advanced: QC + filtering + co-assembly
+bash workflow/runall.sh --qc-and-metaflye --run-filtering \
+  --batch-id batch2 --min-q 12 --min-len 1000
+
 </pre>
 
 <pre>
