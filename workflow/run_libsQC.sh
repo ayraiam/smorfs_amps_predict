@@ -20,6 +20,7 @@ fi
 THREADS="${THREADS:-8}"
 RESULTS_DIR="${RESULTS_DIR:-results}"
 RESULTS="${RESULTS_DIR}"
+BATCH_ID="${BATCH_ID:-batch1}"
 
 # Requested pre-QC directory
 QC_PRE_DIR="${RESULTS}/qc_pre_filt"
@@ -58,6 +59,8 @@ echo "Mode:"
 echo "  RUN_FILTERING: ${RUN_FILTERING}"
 echo "QC checks:"
 echo "  RUN_PORECHOP : ${RUN_PORECHOP}"
+echo "Batch:"
+echo "  BATCH_ID      : ${BATCH_ID}"
 echo "============================================"
 echo
 
@@ -145,28 +148,35 @@ run_multiqc() {
 quick_len_qual_overview() {
   local OUTROOT="$1"
   local LABEL="${2:-raw}"
-  mkdir -p "${OUTROOT}/nanoplot/${LABEL}" "${OUTROOT}/nanostat/${LABEL}"
+
+  # Batch-aware label/path
+  local TAG="${BATCH_ID}_${LABEL}"
+
+  mkdir -p "${OUTROOT}/nanoplot/${TAG}" "${OUTROOT}/nanostat/${TAG}"
 
   for f in "${FASTQ_FILES[@]}"; do
     local base="$(basename "$f")"
     base="${base%.fastq.gz}"; base="${base%.fq.gz}"; base="${base%.fastq}"; base="${base%.fq}"
+
     NanoStat --fastq "$f" --threads "${THREADS}" \
-      --outdir "${OUTROOT}/nanostat/${LABEL}/${base}.stat" \
+      --outdir "${OUTROOT}/nanostat/${TAG}/${base}.stat" \
       --name "${base}" >/dev/null 2>&1 || true
   done
 
   NanoPlot --threads "${THREADS}" --fastq "${FASTQ_FILES[@]}" \
     --N50 --loglength --plots hex dot kde --tsv_stats --raw \
-    -o "${OUTROOT}/nanoplot/${LABEL}" \
-    1>"${OUTROOT}/nanoplot/${LABEL}/NanoPlot.stdout.log" \
-    2>"${OUTROOT}/nanoplot/${LABEL}/NanoPlot.stderr.log" || true
+    -o "${OUTROOT}/nanoplot/${TAG}" \
+    1>"${OUTROOT}/nanoplot/${TAG}/NanoPlot.stdout.log" \
+    2>"${OUTROOT}/nanoplot/${TAG}/NanoPlot.stderr.log" || true
 }
 
 make_fastq_summary() {
   local OUTROOT="$1"
   local LABEL="${2:-raw}"
   mkdir -p "${OUTROOT}/summary"
-  seqkit stats -a -T "${FASTQ_FILES[@]}" > "${OUTROOT}/summary/seqkit_stats_${LABEL}.tsv"
+
+  local TAG="${BATCH_ID}_${LABEL}"
+  seqkit stats -a -T "${FASTQ_FILES[@]}" > "${OUTROOT}/summary/seqkit_stats_${TAG}.tsv"
 }
 
 porechop_check() {
