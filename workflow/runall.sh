@@ -228,6 +228,14 @@ export MKL_NUM_THREADS="$CPUS"
 export NUMEXPR_NUM_THREADS="$CPUS"
 export PIPELINE_INVOCATION="$CMDLINE"
 
+if [[ "${RUN_SMORFS}" -eq 1 ]]; then
+  if ! conda env list | awk '{print $1}' | grep -qx "${SMORFS_ENV}"; then
+    echo "ERROR: Conda env '${SMORFS_ENV}' does not exist."
+    echo "Run: bash workflow/runall.sh --smorfs-create-env"
+    exit 1
+  fi
+fi
+
 if [[ "${SMORFS_CREATE_ENV}" -eq 1 ]]; then
   echo ">>> Creating smORFs env via workflow/run_smorfs_pipeline.sh --create-env" | tee -a "$OUT_LOG" "$CMD_LOG"
   /bin/bash workflow/run_smorfs_pipeline.sh --create-env \
