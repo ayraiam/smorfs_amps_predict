@@ -30,6 +30,16 @@ RUN_PORECHOP=0
 # Optional assembly (OFF by default)
 RUN_METAFlyE=0
 
+# Optional smORF prediction (OFF by default)
+RUN_SMORFS=0
+
+SMORFS_SAMPLE_ID=""   # optional: run only one SampleID
+
+# smORFs settings
+SMORFS_ENV="smorfs_amps_env"
+FUNANNOTATE_DB_DIR=""   # optional; export to funannotate
+SMORFS_CREATE_ENV=0
+
 # Step control (default: run QC; MetaFlye only if requested)
 RUN_QC=1
 RUN_ASSEMBLY=0
@@ -61,6 +71,7 @@ usage() {
   echo "  --qc-only             Run only QC (default)"
   echo "  --metaflye-only       Run only MetaFlye array (skip QC)"
   echo "  --qc-and-metaflye     Run QC then MetaFlye array"
+  echo "  --smorfs-only         Run only smORF discovery on existing MetaFlye assemblies"
   echo
   echo "Mode:"
   echo "  --run-filtering       Enable trimming/filtering step (default: OFF; QC-only)"
@@ -87,6 +98,12 @@ usage() {
   echo
   echo "Batch:"
   echo "  --batch-id STR        Batch identifier for NanoPlot/NanoStat labeling (default: batch1)"
+  echo "smORFs:"
+  echo "  --run-smorfs          Enable smORF prediction step (default: OFF)"
+  echo "  --smorfs-env STR      Conda env name for smORFs pipeline (default: smorfs_amps_env)"
+  echo "  --funannotate-db PATH Funannotate DB dir (exported as FUNANNOTATE_DB_DIR)"
+  echo "  --smorfs-create-env   Create smORFs env and exit"
+	echo "  --smorfs-sample STR   Run smORFs for one SampleID only (e.g., TS-0500)"
   echo
   exit 0
 }
@@ -136,6 +153,21 @@ while [[ $# -gt 0 ]]; do
 
     --run-metaflye) RUN_METAFlyE=1; shift 1 ;;
 
+    --smorfs-only)
+      RUN_QC=0
+      RUN_ASSEMBLY=0
+      RUN_METAFlyE=0
+      RUN_SMORFS=1
+      shift 1
+      ;;
+
+    --run-smorfs) RUN_SMORFS=1; shift 1 ;;
+    --smorfs-env) SMORFS_ENV="$2"; shift 2 ;;
+    --funannotate-db) FUNANNOTATE_DB_DIR="$2"; shift 2 ;;
+    --smorfs-create-env) SMORFS_CREATE_ENV=1; shift 1 ;;
+
+    --smorfs-sample) SMORFS_SAMPLE_ID="$2"; shift 2 ;;
+
     -h|--help) usage ;;
     *) echo "Unknown argument: $1"; usage ;;
   esac
@@ -154,6 +186,9 @@ ERR_LOG="logs/qc_${TS}.err"
 CMD_LOG="logs/command_${TS}.txt"
 MF_OUT_LOG="logs/metaflye_submit_${TS}.out"
 MF_ERR_LOG="logs/metaflye_submit_${TS}.err"
+SMORFS_OUT_LOG="logs/smorfs_submit_${TS}.out"
+SMORFS_ERR_LOG="logs/smorfs_submit_${TS}.err"
+
 
 CMDLINE="$(printf "%q " "$0" "${ORIG_ARGS[@]}")"
 RUN_TS="$(date --iso-8601=seconds)"
@@ -181,6 +216,9 @@ RUN_PWD="$(pwd)"
   echo "  RUN_METAFlyE    : ${RUN_METAFlyE}"
   echo "  PARTITION/TIME  : ${PARTITION} / ${TIME}"
   echo "  CPUS/MEM        : ${CPUS} / ${MEM}"
+  echo "  RUN_SMORFS      : ${RUN_SMORFS}"
+  echo "  SMORFS_ENV      : ${SMORFS_ENV}"
+  echo "  FUNANNOTATE_DB  : ${FUNANNOTATE_DB_DIR:-<unset>}"
   echo "============================================"
   echo
 } | tee -a "$OUT_LOG" "$ERR_LOG" "$CMD_LOG"
@@ -189,6 +227,14 @@ export OMP_NUM_THREADS="$CPUS"
 export MKL_NUM_THREADS="$CPUS"
 export NUMEXPR_NUM_THREADS="$CPUS"
 export PIPELINE_INVOCATION="$CMDLINE"
+
+if [[ "${SMORFS_CREATE_ENV}" -eq 1 ]]; then
+  echo ">>> Creating smORFs env via workflow/run_smorfs_pipeline.sh --create-env" | tee -a "$OUT_LOG" "$CMD_LOG"
+  /bin/bash workflow/run_smorfs_pipeline.sh --create-env \
+    >>"$OUT_LOG" 2>>"$ERR_LOG"
+  echo ">>> Env creation complete. Exiting as requested (--smorfs-create-env)." | tee -a "$OUT_LOG" "$CMD_LOG"
+  exit 0
+fi
 
 if [[ "${RUN_QC}" -eq 1 ]]; then
   srun \
@@ -244,6 +290,38 @@ if [[ "${RUN_ASSEMBLY}" -eq 1 && "${RUN_METAFlyE}" -eq 1 ]]; then
     >>"${MF_OUT_LOG}" \
     2>>"${MF_ERR_LOG}"
 
+fi
+
+SMORFS_JOB_ID=""
+
+if [[ "${RUN_SMORFS}" -eq 1 && "${RUN_METAFlyE}" -eq 0 ]]; then
+  echo ">>> Submitting smORFs job (no MetaFlye dependency; assumes assemblies already exist) ..."
+
+  # NEW: choose single sample vs samples file
+  SMORFS_RUN_ARGS="--samples-file metadata/sample_ids.txt"
+  if [[ -n "${SMORFS_SAMPLE_ID}" ]]; then
+    SMORFS_RUN_ARGS="--sample ${SMORFS_SAMPLE_ID}"
+    echo ">>> smORFs will run for ONE SampleID only: ${SMORFS_SAMPLE_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  else
+    echo ">>> smORFs will run for ALL SampleIDs in metadata/sample_ids.txt (sequential in one job)" | tee -a "$OUT_LOG" "$CMD_LOG"
+  fi
+
+  SMORFS_JOB_ID=$(sbatch \
+    --partition="${PARTITION}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="${CPUS}" \
+    --mem="${MEM}" \
+    --time="${TIME}" \
+    --chdir="${WDIR}" \
+    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR}",SMORFS_ENV="${SMORFS_ENV}" \
+    --output="${SMORFS_OUT_LOG}" \
+    --error="${SMORFS_ERR_LOG}" \
+    --wrap "source \"\$(conda info --base)/etc/profile.d/conda.sh\" && conda activate \"${SMORFS_ENV}\" && bash workflow/run_smorfs_pipeline.sh --run ${SMORFS_RUN_ARGS} --cpus ${CPUS}" \
+    | awk '{print $4}'
+  )
+
+  echo ">>> smORFs submitted as job ${SMORFS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
 fi
 
 echo ">>> Pipeline finished."
