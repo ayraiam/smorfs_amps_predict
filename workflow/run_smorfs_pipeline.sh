@@ -127,7 +127,11 @@ ensure_env_once() {
     fi
   fi
 
+  # conda activation scripts may reference unset vars (e.g., MKL_INTERFACE_LAYER)
+  # so temporarily disable nounset just for activation
+  set +u
   conda activate "${ENV_PREFIX}"
+  set -u
 
   # Sanity checks
   have_cmd seqkit   || die "seqkit not found after activating env."
