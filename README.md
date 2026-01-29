@@ -22,11 +22,13 @@ for downstream smORF and antimicrobial peptide (AMP) discovery.
 
 The pipeline combines:
   1) Read-level quality control and diagnostics (safe, read-only by default)
-  2) Scalable metagenome assembly using Flye (--meta), parallelized via Slurm arrays
+  2) Scalable metagenome co-assembly using Flye (--meta), parallelized via Slurm arrays
+  3) Optional, on-demand smORF prediction (bacterial + fungal) on existing assemblies
 
-QC and assembly are explicitly decoupled, allowing users to re-run
-assembly without repeating QC, resume partial runs, and efficiently
-scale large metagenome collections on HPC systems.
+QC, assembly, and smORF prediction are explicitly decoupled:
+  - Run QC once, reuse outputs
+  - Re-run assembly without repeating QC
+  - Run smORFs later (or re-run) without repeating QC/assembly
 
 QC diagnostics are batch-aware, enabling direct comparison of
 multiple sequencing batches without overwriting results.
@@ -36,21 +38,24 @@ multiple sequencing batches without overwriting results.
 STRUCTURE
 ---------
  /workflow/
-   runall.sh                    - main Slurm launcher (step control)
+   runall.sh                    - main Slurm launcher (QC + assembly; optional smORFs submission)
    run_libsQC.sh                - QC logic (FastQC, NanoPlot, NanoStat, SeqKit)
    submit_metaflye_array.sh     - submits Flye Slurm array (1 SampleID per task; co-assembly)
    metaflye_array_task.sh       - per-array-task Flye runner (co-assembly)
+   run_smorfs_pipeline.sh       - smORFs pipeline on assemblies (Tiara → Prodigal/SmORFinder or funannotate → MMseqs2)
  /envs/                         - Conda environments (created on demand)
  /logs/                         - timestamped Slurm logs
  /metadata/
    metagenome_files.txt         - SampleID ↔ FASTQ mapping (user-provided)
    metaflye_sampleids_*.list    - SampleID → array task mapping
    metaflye_sample_fastqs_*.tsv - SampleID ↔ FASTQ map (absolute paths, normalized)
+   sample_ids.txt               - list of SampleIDs for smORFs runs (one per line)
  /data/                         - input FASTQ(.gz) files (read-only)
  /results/
    qc_pre_filt/                 - QC outputs on raw reads (batch-aware)
    qc_post_filt/                - QC outputs after filtering (optional; batch-aware)
    assembly_metaflye/           - per-sample Flye metagenome assemblies
+   smorfs/                      - per-sample smORF outputs + global summary TSVs
  README.md                      - this file
  LICENSE                        - project license (MIT)
  CITATION.cff                   - citation metadata
@@ -64,7 +69,7 @@ DEPENDENCIES
  - Conda or Mamba
  - Slurm (or compatible scheduler)
 
-Automatically installed in pipeline environments:
+QC + assembly environments (created automatically as needed) install:
  - FastQC
  - MultiQC
  - NanoPlot
@@ -72,22 +77,30 @@ Automatically installed in pipeline environments:
  - SeqKit
  - Cutadapt
  - NanoFilt
- - Porechop
+ - Porechop (diagnostic only)
  - Flye
+
+smORFs environment (created on demand) installs:
+ - Prodigal (meta mode)
+ - Tiara (contig classification; euk vs prok)
+ - SmORFinder (bacterial smORF enrichment/annotation)
+ - funannotate (eukaryotic gene prediction on fungal contigs)
+ - MMseqs2 (non-redundant peptide catalog)
+ - SeqKit (FASTA utilities)
 </pre>
 
 <pre>
 DESIGN PRINCIPLES
 -----------------
- - Explicit separation of QC and assembly stages
+ - Explicit separation of QC, assembly, and smORFs stages
  - QC-only by default (no FASTQ files are modified)
- - Assembly is opt-in and fully parallelized
+ - Assembly is opt-in and fully parallelized (Slurm arrays)
  - Co-assembly is performed per biological sample (SampleID)
+ - smORFs are opt-in and run only when explicitly requested
  - Reproducible Conda environments (created if missing)
  - HPC-native design (Slurm + srun / sbatch arrays)
  - Transparent logging, resumability, and provenance
  - Batch-aware QC for multi-run and longitudinal projects
-
 </pre>
 
 <pre>
@@ -127,29 +140,28 @@ Example:
   S02         lib3.fastq.gz
 
 Run the main launcher:
-
   bash workflow/runall.sh [options]
-
-Optionally, specify a batch identifier to keep QC outputs from
-different sequencing runs separate.
 
 By default:
  - Only the QC stage is executed
  - FASTQ files are never modified
  - No assembly is performed unless explicitly requested
+ - No smORFs are run unless explicitly requested
 </pre>
 
 <pre>
 STEP CONTROL
 ------------
-The pipeline supports explicit step selection:
-
+QC / Assembly:
   --qc-only             Run only QC (default behavior)
   --metaflye-only       Run only metagenome assembly (skip QC)
   --qc-and-metaflye     Run QC, then submit Flye assemblies
 
-This allows safe re-use of QC results and re-running assembly
-without repeating earlier steps.
+smORFs (on existing assemblies):
+  --smorfs-create-env   Create smORFs environment and exit (one-time)
+  --smorfs-only         Submit smORFs job (assumes MetaFlye outputs exist)
+  --smorfs-sample STR   Run smORFs for ONE SampleID only (recommended for first run)
+  --run-smorfs          Enable smORFs submission (alternative to --smorfs-only)
 </pre>
 
 <pre>
@@ -178,9 +190,11 @@ Filtering (used only if --run-filtering is enabled):
   --no-filter           Skip NanoFilt Q/length filtering
 
 Batch control:
-  --batch-id STR        Batch identifier for QC outputs
-                        (default: batch1)
+  --batch-id STR        Batch identifier for QC outputs (default: batch1)
 
+smORFs options:
+  --smorfs-env STR      Conda env name for smORFs pipeline (default: smorfs_amps_env)
+  --funannotate-db PATH Funannotate DB dir (exported as FUNANNOTATE_DB_DIR)
 </pre>
 
 <pre>
@@ -227,14 +241,67 @@ allowing safe re-runs and recovery from partial failures.
 </pre>
 
 <pre>
+smORFs OUTPUTS
+--------------
+smORFs are computed only on existing assemblies:
+  results/assembly_metaflye/<SampleID>/assembly.fasta
+
+Outputs are written to:
+  results/smorfs/<SampleID>/
+
+Per-sample outputs (typical):
+  results/smorfs/<SampleID>/
+    contigs/
+      low_confidence.ids              - contigs < 500 bp (flagged, not removed)
+      bac_contigs.fasta               - Tiara-classified prokaryotic contigs
+      fungi_contigs.fasta             - Tiara-classified eukaryotic contigs
+      other_contigs.fasta             - organelle/unknown contigs
+      classify/tiara.tsv              - Tiara classification table
+
+    bac/
+      prodigal/                       - Prodigal meta-mode genes/proteins
+      smorfinder/                     - SmORFinder outputs/logs
+
+    fungi/
+      funannotate_out/                - funannotate predict outputs/logs
+      fungi_le_100aa.faa              - fungal peptides <= 100 aa (flag)
+
+    catalog/
+      pooled.peptides.faa             - pooled bacterial + fungal peptides
+      nr_catalog_*                    - MMseqs2 clustering outputs
+
+Global (append-safe) summary tables:
+  results/smorfs/assembly_stats.tsv   - per SampleID assembly stats
+  results/smorfs/contig_stats.tsv     - per contig length + low-confidence flag
+</pre>
+
+<pre>
+smORFs MODEL (WHAT HAPPENS)
+--------------------------
+1) Flag contigs < 500 bp as low-confidence (kept; not filtered out)
+2) Track per-site assembly stats into a single TSV
+3) Classify contigs to flag likely fungal contigs, then branch:
+     - Tiara labels contigs as prokaryotic vs eukaryotic (plus organelle/unknown)
+4) Bacterial branch:
+     - Prodigal (meta mode) baseline ORFs
+     - SmORFinder for small ORF enrichment/annotation
+5) Fungal branch:
+     - funannotate predict for eukaryotic gene prediction
+     - flag peptides <= 100 aa from predicted proteins
+6) Pool bacterial + fungal peptides, then de-replicate:
+     - MMseqs2 clustering to create a non-redundant peptide catalog
+</pre>
+
+<pre>
 PARALLELISM MODEL
 -----------------
+Assembly (MetaFlye):
  - One Slurm array task per SampleID
- - Each task concatenates that SampleID’s FASTQs into a single
-   co-assembly input and runs Flye
- - Each task receives its own CPUs, memory, and walltime
- - Conda environment creation is lock-protected and occurs only once
- - Designed for large-scale metagenome collections
+ - Each task concatenates that SampleID’s FASTQs and runs Flye --meta
+
+smORFs:
+ - By default, smORFs can be run for a single SampleID (recommended first run)
+ - You can later scale to one-job-per-assembly (Slurm arrays) as needed
 </pre>
 
 <pre>
@@ -243,11 +310,14 @@ LOGGING & REPRODUCIBILITY
  - logs/qc_*.out / *.err
      QC Slurm stdout/stderr
 
- - logs/metaflye_array_*_<job>_<task>.out/.err
-     Per-sample assembly logs
+ - logs/metaflye_submit_*.out / *.err
+     MetaFlye submit logs
+
+ - logs/smorfs_submit_*.out / *.err
+     smORFs submit logs (single job submission)
 
  - logs/command_*.txt
-     Full pipeline invocation
+     Full pipeline invocation and provenance
 
  - metadata/metagenome_files.txt
      User-provided SampleID ↔ FASTQ mapping
@@ -257,9 +327,6 @@ LOGGING & REPRODUCIBILITY
 
  - metadata/metaflye_sample_fastqs_*.tsv
      Normalized SampleID ↔ FASTQ map (absolute paths)
-
- - envs/
-     Conda environments (created on demand)
 </pre>
 
 <pre>
@@ -285,6 +352,18 @@ bash workflow/runall.sh --qc-and-metaflye --batch-id batch1 --cpus 16 --mem 64G
 bash workflow/runall.sh --qc-and-metaflye --run-filtering \
   --batch-id batch2 --min-q 12 --min-len 1000
 
+# 7) One-time: create the smORFs environment
+bash workflow/runall.sh --smorfs-create-env
+
+# 8) smORFs on ONE existing assembly (recommended first run)
+bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500 --cpus 8 --mem 32G --time 04:00:00
+
+# 9) smORFs on ALL assemblies listed in metadata/sample_ids.txt (sequential in one job)
+bash workflow/runall.sh --smorfs-only --cpus 8 --mem 32G --time 04:00:00
+
+Optional: funannotate database directory
+bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500 --funannotate-db /path/to/funannotate_db
+
 </pre>
 
 <pre>
@@ -304,8 +383,8 @@ CITATION
 If you use this pipeline, please cite:
 
 Lobo, I. (2026).
-smorfs_amps_predict: A reproducible pipeline for quality control
-and metagenome assembly of Nanopore shotgun data.
+smorfs_amps_predict: A reproducible pipeline for quality control,
+metagenome assembly, and on-demand smORF discovery of Nanopore shotgun data.
 AY:RΔ — data and discovery in flow.
 
 See CITATION.cff for full citation metadata.
@@ -319,4 +398,5 @@ https://www.linkedin.com/company/aryaiam
 </pre>
 
 <p align="center"><sub>© 2026 AY:RΔ — data and discovery in flow</sub></p>
+
 
