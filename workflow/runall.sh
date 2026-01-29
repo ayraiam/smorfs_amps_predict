@@ -34,13 +34,7 @@ RUN_METAFlyE=0
 SMORFS_ENV="smorfs_amps_env"
 FUNANNOTATE_DB_DIR=""      # optional; exported to funannotate
 SMORFS_CREATE_ENV=0
-SMORFS_SAMPLE_ID=""        # optional: run only one SampleID
 SMORFS_SAMPLES_FILE="metadata/sample_ids.txt"   # default list (one SampleID per line)
-
-# Optional smORF prediction (OFF by default)
-RUN_SMORFS=0
-
-SMORFS_SAMPLE_ID=""   # optional: run only one SampleID
 
 # Step control (default: run QC; MetaFlye only if requested)
 RUN_QC=1
@@ -327,8 +321,11 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
     --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR}",SMORFS_ENV="${SMORFS_ENV}" \
     --output="${SMORFS_OUT_LOG}" \
     --error="${SMORFS_ERR_LOG}" \
-    --wrap "source \"\$(conda info --base)/etc/profile.d/conda.sh\" && conda activate \"envs/${SMORFS_ENV}\" && bash workflow/run_smorfs_pipeline.sh --run ${SMORFS_RUN_ARGS} --cpus ${CPUS}" \
-    | awk '{print $4}'
+    --wrap "source \"\$(conda info --base)/etc/profile.d/conda.sh\" \
+    && set +u \
+    && conda activate \"${WDIR}/envs/${SMORFS_ENV}\" \
+    && set -u \
+    && bash workflow/run_smorfs_pipeline.sh --run ${SMORFS_RUN_ARGS} --cpus ${CPUS}"
   )
 
   echo ">>> smORFs submitted as job ${SMORFS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
