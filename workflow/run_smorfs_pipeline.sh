@@ -31,7 +31,10 @@ set -euo pipefail
 # ---------------------------
 # Defaults
 # ---------------------------
+# Env naming/prefix (HPC-safe, like MetaFlye)
 ENV_NAME="${SMORFS_ENV:-smorfs_amps_env}"
+ENV_PREFIX_DIR="${ENV_PREFIX_DIR:-envs}"
+ENV_PREFIX="${ENV_PREFIX_DIR}/${ENV_NAME}"
 
 # IMPORTANT:
 # RESULTS_DIR passed from runall.sh is the BASE results folder (default: "results")
@@ -63,45 +66,95 @@ need_cmd() {
 
 mkdirp() { mkdir -p "$1"; }
 
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+init_conda() {
+  if have_cmd conda; then
+    # shellcheck disable=SC1090
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    return 0
+  fi
+  for guess in "$HOME/miniforge3" "$HOME/miniconda3" "/opt/conda"; do
+    if [[ -f "${guess}/etc/profile.d/conda.sh" ]]; then
+      # shellcheck disable=SC1090
+      source "${guess}/etc/profile.d/conda.sh"
+      return 0
+    fi
+  done
+  die "conda not found. Load conda module or add conda to PATH."
+}
+
+ensure_env_once() {
+  init_conda
+  mkdir -p "${ENV_PREFIX_DIR}"
+
+  local lockdir="${ENV_PREFIX}.lockdir"
+
+  if [[ -d "${ENV_PREFIX}" ]]; then
+    msg "Env exists: ${ENV_PREFIX}"
+  else
+    # Acquire lock
+    while ! mkdir "${lockdir}" 2>/dev/null; do
+      msg "Waiting for env lock..."
+      sleep 5
+    done
+
+    # Another process may have created it while we waited
+    if [[ -d "${ENV_PREFIX}" ]]; then
+      msg "Env appeared while waiting. Continuing."
+      rmdir "${lockdir}" || true
+    else
+      msg "Creating conda env at: ${ENV_PREFIX}"
+      local installer="conda"
+      if have_cmd mamba; then installer="mamba"; fi
+
+      # Use strict channel priority to reduce solver pain
+      "${installer}" config set channel_priority strict >/dev/null 2>&1 || true
+
+      # Create a PREFIX env (NOT named env) like MetaFlye
+      "${installer}" create -y -p "${ENV_PREFIX}" --override-channels \
+        -c conda-forge -c bioconda \
+        python=3.8 \
+        prodigal \
+        mmseqs2 \
+        seqkit \
+        csvtk \
+        pigz \
+        tiara
+
+      msg "Env created: ${ENV_PREFIX}"
+      rmdir "${lockdir}" || true
+    fi
+  fi
+
+  conda activate "${ENV_PREFIX}"
+
+  # Sanity checks
+  have_cmd seqkit   || die "seqkit not found after activating env."
+  have_cmd prodigal || die "prodigal not found after activating env."
+  have_cmd mmseqs   || die "mmseqs not found after activating env."
+  have_cmd tiara    || die "tiara not found after activating env."
+  have_cmd pigz     || die "pigz not found after activating env."
+}
+
 # ---------------------------
 # 1) Create env
 # ---------------------------
 create_env() {
-  msg "Creating conda env: ${ENV_NAME}"
+  msg "Ensuring smORFs env exists (prefix mode): ${ENV_PREFIX}"
+  ensure_env_once
 
-  # You can swap "mamba" for "conda" if you don't have mamba.
-  if command -v mamba >/dev/null 2>&1; then
-    CONDA=mamba
-  elif command -v conda >/dev/null 2>&1; then
-    CONDA=conda
-  else
-    die "Neither mamba nor conda found in PATH."
-  fi
-
-  # Tiara currently constrained to older python in many setups (3.7/3.8).
-  # We'll pin python=3.8 to avoid pain. :contentReference[oaicite:6]{index=6}
-  $CONDA create -y -n "${ENV_NAME}" \
-    -c conda-forge -c bioconda \
-    python=3.8 \
-    prodigal \
-    mmseqs2 \
-    seqkit \
-    csvtk \
-    pigz \
-    tiara
-
-  # SmORFinder is installed via pip and provides `smorf` CLI. :contentReference[oaicite:7]{index=7}
-  # Funannotate is typically installed via pip as well. :contentReference[oaicite:8]{index=8}
   msg "Installing pip tools (SmORFinder + funannotate) into env..."
-  set +u
-  source "$(conda info --base)/etc/profile.d/conda.sh"
-  conda activate "${ENV_NAME}"
-  set -u
-
   python -m pip install --upgrade pip
   python -m pip install smorfinder funannotate
 
-  msg "Env created. To activate: conda activate ${ENV_NAME}"
+  # Confirm CLIs are available (best-effort)
+  command -v smorf >/dev/null 2>&1 || msg "WARNING: 'smorf' not found after pip install. Check pip output."
+  command -v funannotate >/dev/null 2>&1 || msg "WARNING: 'funannotate' not found after pip install. Check pip output."
+
+  msg "Env ready. To activate:"
+  msg "  source \"\$(conda info --base)/etc/profile.d/conda.sh\""
+  msg "  conda activate \"${ENV_PREFIX}\""
   msg "Optional (recommended) funannotate DB setup:"
   msg "  funannotate setup -d /path/to/funannotate_db   (set FUNANNOTATE_DB_DIR=/path/to/funannotate_db)"
 }
@@ -450,6 +503,7 @@ if [[ "${MODE}" == "create-env" ]]; then
 fi
 
 # MODE=run
+ensure_env_once
 init_tables
 
 need_cmd seqkit
