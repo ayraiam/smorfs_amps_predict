@@ -30,6 +30,13 @@ RUN_PORECHOP=0
 # Optional assembly (OFF by default)
 RUN_METAFlyE=0
 
+# smORFs settings
+SMORFS_ENV="smorfs_amps_env"
+FUNANNOTATE_DB_DIR=""      # optional; exported to funannotate
+SMORFS_CREATE_ENV=0
+SMORFS_SAMPLE_ID=""        # optional: run only one SampleID
+SMORFS_SAMPLES_FILE="metadata/sample_ids.txt"   # default list (one SampleID per line)
+
 # Optional smORF prediction (OFF by default)
 RUN_SMORFS=0
 
@@ -99,11 +106,14 @@ usage() {
   echo "Batch:"
   echo "  --batch-id STR        Batch identifier for NanoPlot/NanoStat labeling (default: batch1)"
   echo "smORFs:"
-  echo "  --run-smorfs          Enable smORF prediction step (default: OFF)"
+  echo "  --smorfs-only         Submit smORFs job on existing assemblies (no QC, no assembly)"
+  echo "  --smorfs-sample STR   Run smORFs for ONE SampleID only (e.g., TS-0500)"
+  echo "  --smorfs-samples FILE Run smORFs for SampleIDs in FILE (one per line)"
+  echo "  --smorfs-create-env   Create smORFs conda env and exit"
   echo "  --smorfs-env STR      Conda env name for smORFs pipeline (default: smorfs_amps_env)"
-  echo "  --funannotate-db PATH Funannotate DB dir (exported as FUNANNOTATE_DB_DIR)"
-  echo "  --smorfs-create-env   Create smORFs env and exit"
-	echo "  --smorfs-sample STR   Run smORFs for one SampleID only (e.g., TS-0500)"
+  echo "  --funannotate-db PATH Funannotate DB dir (export FUNANNOTATE_DB_DIR)"
+  echo
+
   echo
   exit 0
 }
@@ -153,6 +163,11 @@ while [[ $# -gt 0 ]]; do
 
     --run-metaflye) RUN_METAFlyE=1; shift 1 ;;
 
+    --run-smorfs) RUN_SMORFS=1; shift 1 ;;
+
+    -h|--help) usage ;;
+
+    # ---- smORFs options ----
     --smorfs-only)
       RUN_QC=0
       RUN_ASSEMBLY=0
@@ -160,15 +175,12 @@ while [[ $# -gt 0 ]]; do
       RUN_SMORFS=1
       shift 1
       ;;
-
-    --run-smorfs) RUN_SMORFS=1; shift 1 ;;
+    --smorfs-sample) SMORFS_SAMPLE_ID="$2"; shift 2 ;;
+    --smorfs-samples) SMORFS_SAMPLES_FILE="$2"; shift 2 ;;
+    --smorfs-create-env) SMORFS_CREATE_ENV=1; shift 1 ;;
     --smorfs-env) SMORFS_ENV="$2"; shift 2 ;;
     --funannotate-db) FUNANNOTATE_DB_DIR="$2"; shift 2 ;;
-    --smorfs-create-env) SMORFS_CREATE_ENV=1; shift 1 ;;
 
-    --smorfs-sample) SMORFS_SAMPLE_ID="$2"; shift 2 ;;
-
-    -h|--help) usage ;;
     *) echo "Unknown argument: $1"; usage ;;
   esac
 done
@@ -228,12 +240,12 @@ export MKL_NUM_THREADS="$CPUS"
 export NUMEXPR_NUM_THREADS="$CPUS"
 export PIPELINE_INVOCATION="$CMDLINE"
 
-if [[ "${RUN_SMORFS}" -eq 1 ]]; then
-  if ! conda env list | awk '{print $1}' | grep -qx "${SMORFS_ENV}"; then
-    echo "ERROR: Conda env '${SMORFS_ENV}' does not exist."
-    echo "Run: bash workflow/runall.sh --smorfs-create-env"
-    exit 1
-  fi
+if [[ "${SMORFS_CREATE_ENV}" -eq 1 ]]; then
+  echo ">>> Creating smORFs env via workflow/run_smorfs_pipeline.sh --create-env" | tee -a "$OUT_LOG" "$CMD_LOG"
+  /bin/bash workflow/run_smorfs_pipeline.sh --create-env \
+    >>"$OUT_LOG" 2>>"$ERR_LOG"
+  echo ">>> Env creation complete. Exiting as requested (--smorfs-create-env)." | tee -a "$OUT_LOG" "$CMD_LOG"
+  exit 0
 fi
 
 if [[ "${SMORFS_CREATE_ENV}" -eq 1 ]]; then
@@ -302,16 +314,19 @@ fi
 
 SMORFS_JOB_ID=""
 
-if [[ "${RUN_SMORFS}" -eq 1 && "${RUN_METAFlyE}" -eq 0 ]]; then
-  echo ">>> Submitting smORFs job (no MetaFlye dependency; assumes assemblies already exist) ..."
+if [[ "${RUN_SMORFS}" -eq 1 ]]; then
+  echo ">>> Submitting smORFs job (assumes MetaFlye assemblies already exist) ..."
+  echo ">>> smORFs submit logs:"
+  echo "  ${SMORFS_OUT_LOG}"
+  echo "  ${SMORFS_ERR_LOG}"
 
-  # NEW: choose single sample vs samples file
-  SMORFS_RUN_ARGS="--samples-file metadata/sample_ids.txt"
+  # Decide whether to run a single sample or a samples file
+  SMORFS_RUN_ARGS="--samples-file ${SMORFS_SAMPLES_FILE}"
   if [[ -n "${SMORFS_SAMPLE_ID}" ]]; then
     SMORFS_RUN_ARGS="--sample ${SMORFS_SAMPLE_ID}"
     echo ">>> smORFs will run for ONE SampleID only: ${SMORFS_SAMPLE_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
   else
-    echo ">>> smORFs will run for ALL SampleIDs in metadata/sample_ids.txt (sequential in one job)" | tee -a "$OUT_LOG" "$CMD_LOG"
+    echo ">>> smORFs will run for SampleIDs in: ${SMORFS_SAMPLES_FILE}" | tee -a "$OUT_LOG" "$CMD_LOG"
   fi
 
   SMORFS_JOB_ID=$(sbatch \
