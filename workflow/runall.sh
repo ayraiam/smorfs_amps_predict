@@ -42,11 +42,6 @@ RUN_SMORFS=0
 
 SMORFS_SAMPLE_ID=""   # optional: run only one SampleID
 
-# smORFs settings
-SMORFS_ENV="smorfs_amps_env"
-FUNANNOTATE_DB_DIR=""   # optional; export to funannotate
-SMORFS_CREATE_ENV=0
-
 # Step control (default: run QC; MetaFlye only if requested)
 RUN_QC=1
 RUN_ASSEMBLY=0
@@ -248,14 +243,6 @@ if [[ "${SMORFS_CREATE_ENV}" -eq 1 ]]; then
   exit 0
 fi
 
-if [[ "${SMORFS_CREATE_ENV}" -eq 1 ]]; then
-  echo ">>> Creating smORFs env via workflow/run_smorfs_pipeline.sh --create-env" | tee -a "$OUT_LOG" "$CMD_LOG"
-  /bin/bash workflow/run_smorfs_pipeline.sh --create-env \
-    >>"$OUT_LOG" 2>>"$ERR_LOG"
-  echo ">>> Env creation complete. Exiting as requested (--smorfs-create-env)." | tee -a "$OUT_LOG" "$CMD_LOG"
-  exit 0
-fi
-
 if [[ "${RUN_QC}" -eq 1 ]]; then
   srun \
     --partition="$PARTITION" \
@@ -340,7 +327,7 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
     --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR}",SMORFS_ENV="${SMORFS_ENV}" \
     --output="${SMORFS_OUT_LOG}" \
     --error="${SMORFS_ERR_LOG}" \
-    --wrap "source \"\$(conda info --base)/etc/profile.d/conda.sh\" && conda activate \"${SMORFS_ENV}\" && bash workflow/run_smorfs_pipeline.sh --run ${SMORFS_RUN_ARGS} --cpus ${CPUS}" \
+    --wrap "source \"\$(conda info --base)/etc/profile.d/conda.sh\" && conda activate \"envs/${SMORFS_ENV}\" && bash workflow/run_smorfs_pipeline.sh --run ${SMORFS_RUN_ARGS} --cpus ${CPUS}" \
     | awk '{print $4}'
   )
 
