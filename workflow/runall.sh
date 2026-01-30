@@ -18,6 +18,10 @@ CPUS="8"
 MEM="32G"
 WDIR="$PWD"
 
+# Optional smORF prediction (OFF by default)
+RUN_SMORFS=0
+SMORFS_SAMPLE_ID=""        # optional: run only one SampleID
+
 # Output root (per your request)
 RESULTS_DIR="results"
 
