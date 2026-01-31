@@ -99,46 +99,88 @@ ensure_env_once() {
       sleep 5
     done
 
+    # ALWAYS release lock on exit from this function (success or failure)
+    cleanup_lock() { rmdir "${lockdir}" 2>/dev/null || true; }
+    trap cleanup_lock EXIT INT TERM
+
     # Another process may have created it while we waited
     if [[ -d "${ENV_PREFIX}" ]]; then
       msg "Env appeared while waiting. Continuing."
-      rmdir "${lockdir}" || true
-    else
-      msg "Creating conda env at: ${ENV_PREFIX}"
-      local installer="conda"
-      if have_cmd mamba; then installer="mamba"; fi
-
-      # Use strict channel priority to reduce solver pain
-      "${installer}" config set channel_priority strict >/dev/null 2>&1 || true
-
-      # Create a PREFIX env (NOT named env) like MetaFlye
-      "${installer}" create -y -p "${ENV_PREFIX}" --override-channels \
-        -c conda-forge -c bioconda \
-        python=3.8 \
-        prodigal \
-        mmseqs2 \
-        seqkit \
-        csvtk \
-        pigz \
-        tiara
-
-      msg "Env created: ${ENV_PREFIX}"
-      rmdir "${lockdir}" || true
+      return 0
     fi
+
+    msg "Creating conda env at: ${ENV_PREFIX}"
+    local installer="conda"
+    if have_cmd mamba; then installer="mamba"; fi
+
+    "${installer}" config set channel_priority strict >/dev/null 2>&1 || true
+
+    "${installer}" create -y -p "${ENV_PREFIX}" --override-channels \
+      -c conda-forge -c bioconda \
+      python=3.8 \
+      numpy=1.19.4 \
+      biopython=1.78 \
+      tiara=1.0.3 \
+      funannotate \
+      prodigal \
+      mmseqs2 \
+      seqkit \
+      csvtk \
+      pigz
+
+    msg "Env created: ${ENV_PREFIX}"
+
+    # IMPORTANT: remove the trap after successful creation so it doesn't
+    # run later when you activate conda etc. (optional but cleaner)
+    trap - EXIT INT TERM
+    cleanup_lock
   fi
 
-  # conda activation scripts may reference unset vars (e.g., MKL_INTERFACE_LAYER)
-  # so temporarily disable nounset just for activation
+  # activation below stays the same...
   set +u
   conda activate "${ENV_PREFIX}"
   set -u
 
-  # Sanity checks
+  msg "Python: $(python -V)"
+  msg "Numpy:  $(python -c 'import numpy as np; print(np.__version__)')"
+  msg "Checking tiara import..."
+  python -c "import tiara; print('tiara import OK')"
+
   have_cmd seqkit   || die "seqkit not found after activating env."
   have_cmd prodigal || die "prodigal not found after activating env."
   have_cmd mmseqs   || die "mmseqs not found after activating env."
   have_cmd tiara    || die "tiara not found after activating env."
   have_cmd pigz     || die "pigz not found after activating env."
+}
+
+ensure_smorfs_tools() {
+  # Must be inside the activated env already
+  msg "Ensuring SmORFinder (smorf) and funannotate are installed..."
+
+  # --- funannotate: MUST come from conda, not pip ---
+  if ! command -v funannotate >/dev/null 2>&1; then
+    die "funannotate not found. Install it via conda when creating the env (recommended). Refusing to pip-install because it can break numpy/tiara."
+  else
+    msg "funannotate found"
+  fi
+
+  # --- SmORFinder: allow pip but forbid dependency changes ---
+  if ! command -v smorf >/dev/null 2>&1; then
+    msg "smorf not found -> installing SmORFinder via pip (--no-deps)"
+    python -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+    python -m pip install --no-deps smorfinder
+  else
+    msg "smorf found"
+  fi
+
+  # Final hard checks
+  command -v funannotate >/dev/null 2>&1 || die "funannotate still not found."
+  command -v smorf >/dev/null 2>&1 || die "smorf still not found after pip install."
+
+  # Extra: protect yourself—show numpy version so logs prove it didn't change
+  msg "numpy version: $(python -c 'import numpy as np; print(np.__version__)')"
+
+  msg "smorf + funannotate are ready."
 }
 
 # ---------------------------
@@ -148,13 +190,7 @@ create_env() {
   msg "Ensuring smORFs env exists (prefix mode): ${ENV_PREFIX}"
   ensure_env_once
 
-  msg "Installing pip tools (SmORFinder + funannotate) into env..."
-  python -m pip install --upgrade pip
-  python -m pip install smorfinder funannotate
-
-  # Confirm CLIs are available (best-effort)
-  command -v smorf >/dev/null 2>&1 || msg "WARNING: 'smorf' not found after pip install. Check pip output."
-  command -v funannotate >/dev/null 2>&1 || msg "WARNING: 'funannotate' not found after pip install. Check pip output."
+  ensure_smorfs_tools
 
   msg "Env ready. To activate:"
   msg "  source \"\$(conda info --base)/etc/profile.d/conda.sh\""
@@ -485,6 +521,7 @@ SAMPLES_FILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --create-env) MODE="create-env"; shift ;;
+    --ensure-env) MODE="ensure-env"; shift ;;
     --run)        MODE="run"; shift ;;
     --sample)     SAMPLE="${2:-}"; shift 2 ;;
     --samples-file) SAMPLES_FILE="${2:-}"; shift 2 ;;
@@ -506,16 +543,24 @@ if [[ "${MODE}" == "create-env" ]]; then
   exit 0
 fi
 
+if [[ "${MODE}" == "ensure-env" ]]; then
+  ensure_env_once
+  ensure_smorfs_tools
+  msg "Env + tools ensured."
+  exit 0
+fi
+
 # MODE=run
 ensure_env_once
+ensure_smorfs_tools
 init_tables
 
 need_cmd seqkit
 need_cmd prodigal
 need_cmd mmseqs
 need_cmd tiara
-need_cmd smorf || msg "WARNING: 'smorf' not found. Did you install SmORFinder in the env?"
-need_cmd funannotate || msg "WARNING: 'funannotate' not found. Did you install funannotate in the env?"
+need_cmd smorf
+need_cmd funannotate
 
 if [[ -n "${SAMPLE}" ]]; then
   run_one_sample "${SAMPLE}"
