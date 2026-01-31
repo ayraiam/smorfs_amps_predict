@@ -274,32 +274,38 @@ classify_contigs_tiara() {
 
   mkdirp "${outdir}/contigs/classify"
   msg "[${sample_id}] Classifying contigs with Tiara"
-  # Tiara CLI may differ slightly by version; commonly:
-  #   tiara -i assembly.fasta -o tiara.tsv -t <threads>
-  # We'll use a conservative call and fail loudly if the CLI differs.
+
+  # Run Tiara
   tiara -i "${asm_fa}" -o "${outdir}/contigs/classify/tiara.tsv" -t "${CPUS}"
 
-  # tiara.tsv typically: contig_id <tab> label
-  # Split contigs by label -> FASTA files
+  # tiara.tsv typically has a header + rows: sequence_id <tab> class_fst_stage
+  # Build a clean 2-column map WITHOUT the header
   msg "[${sample_id}] Splitting contigs by Tiara label"
-  awk -F'\t' 'BEGIN{OFS="\t"} NR>0{print $1,$2}' "${outdir}/contigs/classify/tiara.tsv" \
+  awk -F'\t' 'BEGIN{OFS="\t"} NR>1{print $1,$2}' "${outdir}/contigs/classify/tiara.tsv" \
     > "${outdir}/contigs/classify/tiara.map.tsv"
 
-  awk -F'\t' '$2 ~ /eukarya/i {print $1}' "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/fungi.ids"
-  awk -F'\t' '$2 ~ /(bacteria|archaea|prokarya)/i {print $1}' "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/bac.ids"
-  awk -F'\t' '$2 ~ /(organelle|plastid|mitochond)/i {print $1}' "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/other.ids"
+  # IMPORTANT: do NOT use /i in awk (not portable). Use IGNORECASE instead.
+  awk -F'\t' 'BEGIN{IGNORECASE=1} $2 ~ /eukarya/ {print $1}' \
+    "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/fungi.ids"
 
-  # Extract FASTAs
+  awk -F'\t' 'BEGIN{IGNORECASE=1} $2 ~ /(bacteria|archaea|prokarya)/ {print $1}' \
+    "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/bac.ids"
+
+  awk -F'\t' 'BEGIN{IGNORECASE=1} $2 ~ /(organelle|plastid|mitochond)/ {print $1}' \
+    "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/other.ids"
+
+  # Extract FASTAs (keep empty output files if no IDs; do not fail pipeline)
   seqkit grep -f "${outdir}/contigs/bac.ids"   "${asm_fa}" > "${outdir}/contigs/bac_contigs.fasta"   || true
   seqkit grep -f "${outdir}/contigs/fungi.ids" "${asm_fa}" > "${outdir}/contigs/fungi_contigs.fasta" || true
   seqkit grep -f "${outdir}/contigs/other.ids" "${asm_fa}" > "${outdir}/contigs/other_contigs.fasta" || true
 
-	# Record basic counts in a small note file (robust: handles empty/missing FASTA)
+  # Record basic counts in a small note file (robust: handles empty/missing FASTA)
   count_fasta_seqs() {
     local fa="$1"
     if [[ -s "$fa" ]]; then
-      # seqkit stats -T columns: file format type num_seqs ...
-      seqkit stats -T "$fa" 2>/dev/null | awk 'NR==2{print $4}'
+      # Always emit exactly one integer (even if seqkit output is unexpected)
+      seqkit stats -T "$fa" 2>/dev/null \
+        | awk 'NR==2{print $4; found=1} END{if(!found) print 0}'
     else
       echo 0
     fi
