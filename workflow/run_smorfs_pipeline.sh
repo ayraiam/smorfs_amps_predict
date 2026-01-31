@@ -294,12 +294,22 @@ classify_contigs_tiara() {
   seqkit grep -f "${outdir}/contigs/fungi.ids" "${asm_fa}" > "${outdir}/contigs/fungi_contigs.fasta" || true
   seqkit grep -f "${outdir}/contigs/other.ids" "${asm_fa}" > "${outdir}/contigs/other_contigs.fasta" || true
 
-  # Record basic counts in a small note file
+	# Record basic counts in a small note file (robust: handles empty/missing FASTA)
+  count_fasta_seqs() {
+    local fa="$1"
+    if [[ -s "$fa" ]]; then
+      # seqkit stats -T columns: file format type num_seqs ...
+      seqkit stats -T "$fa" 2>/dev/null | awk 'NR==2{print $4}'
+    else
+      echo 0
+    fi
+  }
+
   {
     echo "sample_id=${sample_id}"
-    echo "bac_contigs=$(grep -c '^>' "${outdir}/contigs/bac_contigs.fasta"   2>/dev/null || echo 0)"
-    echo "fungi_contigs=$(grep -c '^>' "${outdir}/contigs/fungi_contigs.fasta" 2>/dev/null || echo 0)"
-    echo "other_contigs=$(grep -c '^>' "${outdir}/contigs/other_contigs.fasta" 2>/dev/null || echo 0)"
+    echo "bac_contigs=$(count_fasta_seqs "${outdir}/contigs/bac_contigs.fasta")"
+    echo "fungi_contigs=$(count_fasta_seqs "${outdir}/contigs/fungi_contigs.fasta")"
+    echo "other_contigs=$(count_fasta_seqs "${outdir}/contigs/other_contigs.fasta")"
   } > "${outdir}/contigs/classify/tiara.counts.txt"
 }
 
