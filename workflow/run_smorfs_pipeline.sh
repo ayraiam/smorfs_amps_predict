@@ -285,9 +285,9 @@ classify_contigs_tiara() {
   awk -F'\t' 'BEGIN{OFS="\t"} NR>0{print $1,$2}' "${outdir}/contigs/classify/tiara.tsv" \
     > "${outdir}/contigs/classify/tiara.map.tsv"
 
-  awk -F'\t' '$2 ~ /Eukarya/i {print $1}' "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/fungi.ids"
-  awk -F'\t' '$2 ~ /(Bacteria|Archaea|Prokarya)/i {print $1}' "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/bac.ids"
-  awk -F'\t' '$2 ~ /(Organelle|Unknown)/i {print $1}' "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/other.ids"
+  awk -F'\t' '$2 ~ /eukarya/i {print $1}' "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/fungi.ids"
+  awk -F'\t' '$2 ~ /(bacteria|archaea|prokarya)/i {print $1}' "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/bac.ids"
+  awk -F'\t' '$2 ~ /(organelle|plastid|mitochond)/i {print $1}' "${outdir}/contigs/classify/tiara.map.tsv" > "${outdir}/contigs/other.ids"
 
   # Extract FASTAs
   seqkit grep -f "${outdir}/contigs/bac.ids"   "${asm_fa}" > "${outdir}/contigs/bac_contigs.fasta"   || true
