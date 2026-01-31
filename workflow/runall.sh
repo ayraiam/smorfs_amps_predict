@@ -314,7 +314,7 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
     echo ">>> smORFs will run for SampleIDs in: ${SMORFS_SAMPLES_FILE}" | tee -a "$OUT_LOG" "$CMD_LOG"
   fi
 
-  SMORFS_JOB_ID=$(sbatch \
+	SMORFS_JOB_ID=$(sbatch \
     --partition="${PARTITION}" \
     --nodes=1 \
     --ntasks=1 \
@@ -322,14 +322,10 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
     --mem="${MEM}" \
     --time="${TIME}" \
     --chdir="${WDIR}" \
-    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR}",SMORFS_ENV="${SMORFS_ENV}" \
+    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR}",SMORFS_ENV="${SMORFS_ENV}",SMORFS_RUN_ARGS="${SMORFS_RUN_ARGS}" \
     --output="${SMORFS_OUT_LOG}" \
     --error="${SMORFS_ERR_LOG}" \
-    --wrap "source \"\$(conda info --base)/etc/profile.d/conda.sh\" \
-    && set +u \
-    && conda activate \"${WDIR}/envs/${SMORFS_ENV}\" \
-    && set -u \
-    && bash workflow/run_smorfs_pipeline.sh --run ${SMORFS_RUN_ARGS} --cpus ${CPUS}"
+    workflow/smorfs_job.sh
   )
 
   echo ">>> smORFs submitted as job ${SMORFS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
