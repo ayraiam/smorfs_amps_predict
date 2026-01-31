@@ -161,7 +161,7 @@ smORFs (on existing assemblies):
   --smorfs-create-env   Create smORFs environment and exit (one-time)
   --smorfs-only         Submit smORFs job (assumes MetaFlye outputs exist)
   --smorfs-sample STR   Run smORFs for ONE SampleID only (recommended for first run)
-  --run-smorfs          Enable smORFs submission (alternative to --smorfs-only)
+  --run-smorfs          **Compatibility flag** (legacy); prefer --smorfs-only
 </pre>
 
 <pre>
@@ -301,7 +301,9 @@ Assembly (MetaFlye):
 
 smORFs:
  - By default, smORFs can be run for a single SampleID (recommended first run)
- - You can later scale to one-job-per-assembly (Slurm arrays) as needed
+ - You can also run smORFs for all SampleIDs listed in metadata/sample_ids.txt
+ - **Current implementation runs SampleIDs sequentially within a single Slurm job**
+ - **Array-based (one-task-per-assembly) smORFs is a planned extension**
 </pre>
 
 <pre>
@@ -359,6 +361,7 @@ bash workflow/runall.sh --smorfs-create-env
 bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500 --cpus 8 --mem 32G --time 04:00:00
 
 # 9) smORFs on ALL assemblies listed in metadata/sample_ids.txt (sequential in one job)
+#    NOTE: If metadata/sample_ids.txt does not exist, you must use --smorfs-sample.
 bash workflow/runall.sh --smorfs-only --cpus 8 --mem 32G --time 04:00:00
 
 Optional: funannotate database directory
@@ -372,9 +375,9 @@ NOTES ON PORECHOP
 Porechop is used ONLY as a diagnostic tool when --run-porechop is enabled.
 It does NOT modify FASTQ files.
 
-This is intentional, as modern ONT basecalling software (e.g. MinKNOW)
-already removes adapters in most workflows. The porechop step helps
-identify residual or unexpected adapter signals.
+This is intentional, as modern ONT basecalling workflows
+(e.g. **MinKNOW + Guppy/Dorado**) already remove adapters in most workflows.
+The porechop step helps identify residual or unexpected adapter signals.
 </pre>
 
 <pre>
@@ -398,5 +401,6 @@ https://www.linkedin.com/company/aryaiam
 </pre>
 
 <p align="center"><sub>© 2026 AY:RΔ — data and discovery in flow</sub></p>
+
 
 
