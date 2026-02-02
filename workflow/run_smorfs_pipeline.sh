@@ -126,7 +126,8 @@ ensure_env_once() {
       mmseqs2 \
       seqkit \
       csvtk \
-      pigz
+      pigz \
+      tensorflow-cpu=2.10
 
     msg "Env created: ${ENV_PREFIX}"
 
@@ -172,6 +173,9 @@ ensure_smorfs_tools() {
   else
     msg "smorf found"
   fi
+
+  msg "Checking tensorflow import..."
+  python -c "import tensorflow as tf; print('tensorflow OK', tf.__version__)"
 
   # Final hard checks
   command -v funannotate >/dev/null 2>&1 || die "funannotate still not found."
