@@ -22,6 +22,10 @@ WDIR="$PWD"
 RUN_SMORFS=0
 SMORFS_SAMPLE_ID=""        # optional: run only one SampleID
 
+# Optional downstream analysis (MetaFlye flye.log -> table + plots)
+RUN_DOWNSTREAM=0
+METRICS_ENV="metaflye_metrics_env"
+
 # Output root (per your request)
 RESULTS_DIR="results"
 
@@ -105,7 +109,10 @@ usage() {
   echo "  --smorfs-create-env   Create smORFs conda env and exit"
   echo "  --smorfs-env STR      Conda env name for smORFs pipeline (default: smorfs_amps_env)"
   echo "  --funannotate-db PATH Funannotate DB dir (export FUNANNOTATE_DB_DIR)"
-  echo
+  echo "Downstream:"
+  echo "  --downstream-only          Run downstream analysis only (parse flye.log + boxplots)"
+  echo "  --run-downstream           Run downstream analysis in addition to selected steps (CAUTION: run after assembly finishes)"
+  echo "  --metrics-env STR          Env name for downstream analysis (default: metaflye_metrics_env)"
 
   echo
   exit 0
@@ -173,6 +180,16 @@ while [[ $# -gt 0 ]]; do
     --smorfs-create-env) SMORFS_CREATE_ENV=1; shift 1 ;;
     --smorfs-env) SMORFS_ENV="$2"; shift 2 ;;
     --funannotate-db) FUNANNOTATE_DB_DIR="$2"; shift 2 ;;
+    --run-downstream) RUN_DOWNSTREAM=1; shift 1 ;;
+    --downstream-only)
+      RUN_QC=0
+      RUN_ASSEMBLY=0
+      RUN_METAFlyE=0
+      RUN_SMORFS=0
+      RUN_DOWNSTREAM=1
+      shift 1
+      ;;
+    --metrics-env) METRICS_ENV="$2"; shift 2 ;;
 
     *) echo "Unknown argument: $1"; usage ;;
   esac
@@ -193,7 +210,8 @@ MF_OUT_LOG="logs/metaflye_submit_${TS}.out"
 MF_ERR_LOG="logs/metaflye_submit_${TS}.err"
 SMORFS_OUT_LOG="logs/smorfs_submit_${TS}.out"
 SMORFS_ERR_LOG="logs/smorfs_submit_${TS}.err"
-
+DS_OUT_LOG="logs/downstream_${TS}.out"
+DS_ERR_LOG="logs/downstream_${TS}.err"
 
 CMDLINE="$(printf "%q " "$0" "${ORIG_ARGS[@]}")"
 RUN_TS="$(date --iso-8601=seconds)"
@@ -224,6 +242,8 @@ RUN_PWD="$(pwd)"
   echo "  RUN_SMORFS      : ${RUN_SMORFS}"
   echo "  SMORFS_ENV      : ${SMORFS_ENV}"
   echo "  FUNANNOTATE_DB  : ${FUNANNOTATE_DB_DIR:-<unset>}"
+  echo "  RUN_DOWNSTREAM : ${RUN_DOWNSTREAM}"
+  echo "  METRICS_ENV    : ${METRICS_ENV}"
   echo "============================================"
   echo
 } | tee -a "$OUT_LOG" "$ERR_LOG" "$CMD_LOG"
@@ -314,7 +334,7 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
     echo ">>> smORFs will run for SampleIDs in: ${SMORFS_SAMPLES_FILE}" | tee -a "$OUT_LOG" "$CMD_LOG"
   fi
 
-	SMORFS_JOB_ID=$(sbatch \
+  SMORFS_JOB_ID=$(sbatch \
     --partition="${PARTITION}" \
     --nodes=1 \
     --ntasks=1 \
@@ -329,6 +349,27 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
   )
 
   echo ">>> smORFs submitted as job ${SMORFS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+fi
+
+if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
+  echo ">>> Running downstream analysis (flye.log -> metrics + boxplots) ..." | tee -a "$OUT_LOG" "$CMD_LOG"
+  echo ">>> Downstream logs:"
+  echo "  ${DS_OUT_LOG}"
+  echo "  ${DS_ERR_LOG}"
+
+  srun \
+    --partition="$PARTITION" \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="$CPUS" \
+    --mem="$MEM" \
+    --time="$TIME" \
+    --chdir="$WDIR" \
+    --export=ALL,RESULTS_DIR="$RESULTS_DIR",METRICS_ENV="$METRICS_ENV" \
+    /bin/bash workflow/downstream_analysis.sh \
+      --results-dir "$RESULTS_DIR" \
+      --metrics-env "$METRICS_ENV" \
+    >>"$DS_OUT_LOG" 2>>"$DS_ERR_LOG"
 fi
 
 echo ">>> Pipeline finished."
