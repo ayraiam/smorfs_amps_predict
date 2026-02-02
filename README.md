@@ -24,11 +24,13 @@ The pipeline combines:
   1) Read-level quality control and diagnostics (safe, read-only by default)
   2) Scalable metagenome co-assembly using Flye (--meta), parallelized via Slurm arrays
   3) Optional, on-demand smORF prediction (bacterial + fungal) on existing assemblies
+  4) Optional downstream analysis of MetaFlye assemblies (flye.log → metrics TSV + boxplots)
 
-QC, assembly, and smORF prediction are explicitly decoupled:
+QC, assembly, smORF prediction, and downstream analysis are explicitly decoupled:
   - Run QC once, reuse outputs
   - Re-run assembly without repeating QC
   - Run smORFs later (or re-run) without repeating QC/assembly
+  - Run downstream analysis after assemblies are available (no FASTQs required)
 
 QC diagnostics are batch-aware, enabling direct comparison of
 multiple sequencing batches without overwriting results.
@@ -43,6 +45,9 @@ STRUCTURE
    submit_metaflye_array.sh     - submits Flye Slurm array (1 SampleID per task; co-assembly)
    metaflye_array_task.sh       - per-array-task Flye runner (co-assembly)
    run_smorfs_pipeline.sh       - smORFs pipeline on assemblies (Tiara → Prodigal/SmORFinder or funannotate → MMseqs2)
+   downstream_analysis.sh       - downstream analysis (flye.log → metrics TSV + boxplots)
+   summarize_flye_logs.py       - parse Flye logs into a metrics table (called by downstream_analysis.sh)
+   plot_metaflye_metrics.R      - generate per-metric boxplots from metrics TSV (called by downstream_analysis.sh)
  /envs/                         - Conda environments (created on demand)
  /logs/                         - timestamped Slurm logs
  /metadata/
@@ -55,6 +60,8 @@ STRUCTURE
    qc_pre_filt/                 - QC outputs on raw reads (batch-aware)
    qc_post_filt/                - QC outputs after filtering (optional; batch-aware)
    assembly_metaflye/           - per-sample Flye metagenome assemblies
+     finalize_metrics.tsv       - downstream: aggregated Flye assembly metrics (all SampleIDs)
+     finalize_boxplots/         - downstream: boxplots summarizing Flye metrics across samples
    smorfs/                      - per-sample smORF outputs + global summary TSVs
  README.md                      - this file
  LICENSE                        - project license (MIT)
@@ -87,16 +94,26 @@ smORFs environment (created on demand) installs:
  - funannotate (eukaryotic gene prediction on fungal contigs)
  - MMseqs2 (non-redundant peptide catalog)
  - SeqKit (FASTA utilities)
+
+Downstream analysis environment (created on first run of downstream_analysis.sh) installs:
+ - Python ≥ 3.10
+ - pandas
+ - matplotlib
+ - R ≥ 4.3
+ - ggplot2
+ - readr
+ - dplyr
 </pre>
 
 <pre>
 DESIGN PRINCIPLES
 -----------------
- - Explicit separation of QC, assembly, and smORFs stages
+ - Explicit separation of QC, assembly, smORFs, and downstream analysis stages
  - QC-only by default (no FASTQ files are modified)
  - Assembly is opt-in and fully parallelized (Slurm arrays)
  - Co-assembly is performed per biological sample (SampleID)
  - smORFs are opt-in and run only when explicitly requested
+ - Downstream analysis is opt-in and can run independently (reads Flye logs only)
  - Reproducible Conda environments (created if missing)
  - HPC-native design (Slurm + srun / sbatch arrays)
  - Transparent logging, resumability, and provenance
@@ -162,6 +179,11 @@ smORFs (on existing assemblies):
   --smorfs-only         Submit smORFs job (assumes MetaFlye outputs exist)
   --smorfs-sample STR   Run smORFs for ONE SampleID only (recommended for first run)
   --run-smorfs          **Compatibility flag** (legacy); prefer --smorfs-only
+
+Downstream (MetaFlye logs):
+  --downstream-only          Run downstream analysis only (parse flye.log + boxplots)
+  --run-downstream           Run downstream analysis in addition to selected steps
+  --metrics-env STR          Env name for downstream analysis (default: metaflye_metrics_env)
 </pre>
 
 <pre>
@@ -195,6 +217,9 @@ Batch control:
 smORFs options:
   --smorfs-env STR      Conda env name for smORFs pipeline (default: smorfs_amps_env)
   --funannotate-db PATH Funannotate DB dir (exported as FUNANNOTATE_DB_DIR)
+
+Downstream options:
+  --metrics-env STR     Conda env name for downstream analysis (default: metaflye_metrics_env)
 </pre>
 
 <pre>
@@ -238,6 +263,19 @@ assembled using Flye --meta.
 
 Assemblies are skipped automatically if output already exists,
 allowing safe re-runs and recovery from partial failures.
+</pre>
+
+<pre>
+DOWNSTREAM OUTPUTS (MetaFlye logs)
+---------------------------------
+Downstream analysis summarizes assembly behavior across SampleIDs using Flye logs only.
+
+Inputs:
+  results/assembly_metaflye/<SampleID>/flye.log
+
+Outputs:
+  results/assembly_metaflye/finalize_metrics.tsv
+  results/assembly_metaflye/finalize_boxplots/boxplot_*.png
 </pre>
 
 <pre>
@@ -304,6 +342,10 @@ smORFs:
  - You can also run smORFs for all SampleIDs listed in metadata/sample_ids.txt
  - **Current implementation runs SampleIDs sequentially within a single Slurm job**
  - **Array-based (one-task-per-assembly) smORFs is a planned extension**
+
+Downstream:
+ - Downstream analysis can run independently from the rest of the pipeline
+ - It reads Flye logs only and generates a metrics table + boxplots
 </pre>
 
 <pre>
@@ -317,6 +359,9 @@ LOGGING & REPRODUCIBILITY
 
  - logs/smorfs_submit_*.out / *.err
      smORFs submit logs (single job submission)
+
+ - logs/downstream_*.out / *.err
+     Downstream analysis stdout/stderr (metrics + boxplots)
 
  - logs/command_*.txt
      Full pipeline invocation and provenance
@@ -367,6 +412,11 @@ bash workflow/runall.sh --smorfs-only --cpus 8 --mem 32G --time 04:00:00
 Optional: funannotate database directory
 bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500 --funannotate-db /path/to/funannotate_db
 
+# 10) Downstream analysis only (flye.log -> metrics + boxplots)
+bash workflow/runall.sh --downstream-only --cpus 4 --mem 8G --time 01:00:00
+
+# 11) Run downstream in addition to selected steps (use only when Flye outputs already exist)
+bash workflow/runall.sh --smorfs-only --run-downstream --cpus 8 --mem 32G --time 04:00:00
 </pre>
 
 <pre>
@@ -401,6 +451,7 @@ https://www.linkedin.com/company/aryaiam
 </pre>
 
 <p align="center"><sub>© 2026 AY:RΔ — data and discovery in flow</sub></p>
+
 
 
 
