@@ -17,6 +17,7 @@ TIME="04:00:00"
 CPUS="8"
 MEM="32G"
 WDIR="$PWD"
+CONSTRAINT=""
 
 # Optional smORF prediction (OFF by default)
 RUN_SMORFS=0
@@ -116,6 +117,7 @@ usage() {
   echo "  --downstream-only          Run downstream analysis only (parse flye.log + boxplots)"
   echo "  --run-downstream           Run downstream analysis in addition to selected steps (CAUTION: run after assembly finishes)"
   echo "  --metrics-env STR          Env name for downstream analysis (default: metaflye_metrics_env)"
+  echo "  --constraint STR      Slurm constraint (e.g., skylake_avx512)"
 
   echo
   exit 0
@@ -129,6 +131,7 @@ while [[ $# -gt 0 ]]; do
     --mem) MEM="$2"; shift 2 ;;
     --wd) WDIR="$2"; shift 2 ;;
     --results-dir) RESULTS_DIR="$2"; shift 2 ;;
+    --constraint) CONSTRAINT="$2"; shift 2 ;;
 
     --qc-only)
       RUN_QC=1
@@ -374,7 +377,13 @@ if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
     DS_ARGS+=( --run-map )
   fi
 
+  SRUN_CONSTRAINT=()
+  if [[ -n "${CONSTRAINT}" ]]; then
+    SRUN_CONSTRAINT=( --constraint="${CONSTRAINT}" )
+  fi
+
   srun \
+    "${SRUN_CONSTRAINT[@]}" \
     --partition="$PARTITION" \
     --nodes=1 \
     --ntasks=1 \
