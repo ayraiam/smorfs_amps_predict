@@ -55,6 +55,9 @@ DO_DEMUX=0
 DO_POLY_TRIM=1
 DO_QUAL_LEN_FILTER=1
 
+RUN_DOWNSTREAM_AMPS=0
+RUN_DOWNSTREAM_MAP=0
+
 MIN_Q="10"
 MIN_LEN="500"
 MAX_LEN="0"
@@ -190,6 +193,9 @@ while [[ $# -gt 0 ]]; do
       shift 1
       ;;
     --metrics-env) METRICS_ENV="$2"; shift 2 ;;
+    --run-downstream-amps) RUN_DOWNSTREAM_AMPS=1; shift 1 ;;
+    --run-downstream-map) RUN_DOWNSTREAM_MAP=1; shift 1 ;;
+    --downstream-full) RUN_DOWNSTREAM=1; RUN_DOWNSTREAM_AMPS=1; RUN_DOWNSTREAM_MAP=1; shift 1 ;;
 
     *) echo "Unknown argument: $1"; usage ;;
   esac
