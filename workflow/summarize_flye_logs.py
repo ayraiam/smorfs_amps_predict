@@ -13,7 +13,7 @@ def parse_flye_log(log_path: Path) -> dict:
 
     out = {
         "site": log_path.parent.name,
-        "total_reads_bp": None,
+        "total_reads_bp": None,        # WILL BE STORED IN Mb
         "total_assembly_mb": None,
         "contigs": None,
         "n50_bp": None,
@@ -33,24 +33,15 @@ def parse_flye_log(log_path: Path) -> dict:
             re.compile(r"Total assembled length:\s*([0-9]+)"),
         ],
         "contigs": [
-            # Flye often prints something like:
-            #   Fragments: <N>
-            # or
-            #   Fragments <N>
             re.compile(r"^\s*Fragments\s*[:=]\s*([0-9]+)\s*$"),
             re.compile(r"^\s*Fragments\s+([0-9]+)\s*$"),
         ],
         "n50_bp": [
-            # Example:
-            #   Fragments N50: <N>
             re.compile(r"^\s*Fragments\s+N50\s*[:=]\s*([0-9]+)\s*$"),
         ],
         "largest_bp": [
-            # Example:
-            #   Largest frg: <N>
             re.compile(r"^\s*Largest\s+frg\s*[:=]\s*([0-9]+)\s*$"),
         ],
-
         "mean_cov": [
             re.compile(r"Mean coverage:\s*([0-9]+(?:\.[0-9]+)?)"),
             re.compile(r"Mean cov(?:erage)?:\s*([0-9]+(?:\.[0-9]+)?)"),
@@ -58,6 +49,7 @@ def parse_flye_log(log_path: Path) -> dict:
     }
 
     assembly_bp = None
+    reads_bp = None
 
     for line in text:
         line = line.strip()
@@ -65,7 +57,7 @@ def parse_flye_log(log_path: Path) -> dict:
         for rx in patterns["total_reads_bp"]:
             m = rx.search(line)
             if m:
-                out["total_reads_bp"] = int(m.group(1))
+                reads_bp = int(m.group(1))
 
         for rx in patterns["total_assembly_bp"]:
             m = rx.search(line)
@@ -75,7 +67,7 @@ def parse_flye_log(log_path: Path) -> dict:
         for rx in patterns["contigs"]:
             m = rx.search(line)
             if m:
-                out["contigs"] = int(float(m.group(1)))
+                out["contigs"] = int(m.group(1))
 
         for rx in patterns["n50_bp"]:
             m = rx.search(line)
@@ -92,6 +84,10 @@ def parse_flye_log(log_path: Path) -> dict:
             if m:
                 out["mean_cov"] = float(m.group(1))
 
+    # Convert units
+    if reads_bp is not None:
+        out["total_reads_bp"] = reads_bp / 1e6   # bp → Mb
+
     if assembly_bp is not None:
         out["total_assembly_mb"] = assembly_bp / 1e6
 
@@ -99,7 +95,7 @@ def parse_flye_log(log_path: Path) -> dict:
 
 def usage():
     print(
-        "Usage: summarize_flye_logs.py <BASE_RESULTS_DIR> [--out <tsv>] [--no-plots]\n"
+        "Usage: summarize_flye_logs.py <BASE_RESULTS_DIR> [--out <tsv>]\n"
         "\n"
         "Parses Flye/MetaFlye flye.log files under:\n"
         "  <BASE_RESULTS_DIR>/assembly_metaflye/*/flye.log\n"
@@ -114,10 +110,8 @@ def main():
 
     base_results = Path(sys.argv[1]).resolve()
 
-    # Default output location
     out_tsv = base_results / "assembly_metaflye" / "finalize_metrics.tsv"
 
-    # Parse args (keep --no-plots for backward compatibility)
     argv = sys.argv[2:]
     if "--out" in argv:
         i = argv.index("--out")
@@ -133,8 +127,16 @@ def main():
     rows = [parse_flye_log(p) for p in logs]
     df = pd.DataFrame(rows)
 
-    # Stable column order
-    cols = ["site", "total_reads_bp", "total_assembly_mb", "contigs", "n50_bp", "largest_bp", "mean_cov", "flye_log"]
+    cols = [
+        "site",
+        "total_reads_bp",
+        "total_assembly_mb",
+        "contigs",
+        "n50_bp",
+        "largest_bp",
+        "mean_cov",
+        "flye_log",
+    ]
     df = df.reindex(columns=[c for c in cols if c in df.columns])
 
     out_tsv.parent.mkdir(parents=True, exist_ok=True)
