@@ -45,9 +45,10 @@ STRUCTURE
    submit_metaflye_array.sh     - submits Flye Slurm array (1 SampleID per task; co-assembly)
    metaflye_array_task.sh       - per-array-task Flye runner (co-assembly)
    run_smorfs_pipeline.sh       - smORFs pipeline on assemblies (Tiara → Prodigal/SmORFinder or funannotate → MMseqs2)
-   downstream_analysis.sh       - downstream analysis (flye.log → metrics TSV + boxplots)
-   summarize_flye_logs.py       - parse Flye logs into a metrics table (called by downstream_analysis.sh)
-   plot_metaflye_metrics.R      - generate per-metric boxplots from metrics TSV (called by downstream_analysis.sh)
+   downstream_analysis.sh       - downstream analysis (Flye metrics, AMP prediction, read-back mapping)
+   summarize_flye_logs.py       - parse Flye logs into a metrics table
+   plot_metaflye_metrics.R      - generate per-metric boxplots from metrics TSV
+   predict_amps.py              - AMP prediction using Macrel (global NR peptides)
  /envs/                         - Conda environments (created on demand)
  /logs/                         - timestamped Slurm logs
  /metadata/
@@ -60,12 +61,13 @@ STRUCTURE
    qc_pre_filt/                 - QC outputs on raw reads (batch-aware)
    qc_post_filt/                - QC outputs after filtering (optional; batch-aware)
    assembly_metaflye/           - per-sample Flye metagenome assemblies
-     finalize_metrics.tsv       - downstream: aggregated Flye assembly metrics (all SampleIDs)
-     finalize_boxplots/         - downstream: boxplots summarizing Flye metrics across samples
+     finalize_metrics.tsv       - downstream: aggregated Flye assembly metrics
+     finalize_boxplots/         - downstream: boxplots summarizing Flye metrics
    smorfs/                      - per-sample smORF outputs + global summary TSVs
- README.md                      - this file
- LICENSE                        - project license (MIT)
- CITATION.cff                   - citation metadata
+   catalog_global/              - global NR peptides, AMP predictions, mapping outputs
+ README.md
+ LICENSE
+ CITATION.cff
 </pre>
 
 <pre>
@@ -103,6 +105,13 @@ Downstream analysis environment (created on first run of downstream_analysis.sh)
  - ggplot2
  - readr
  - dplyr
+ - ggbeeswarm
+ - MMseqs2
+ - minimap2
+ - samtools
+ - bedtools
+ - seqkit
+ - macrel
 </pre>
 
 <pre>
@@ -113,7 +122,9 @@ DESIGN PRINCIPLES
  - Assembly is opt-in and fully parallelized (Slurm arrays)
  - Co-assembly is performed per biological sample (SampleID)
  - smORFs are opt-in and run only when explicitly requested
- - Downstream analysis is opt-in and can run independently (reads Flye logs only)
+ - Downstream analysis is opt-in and can run independently
+ - AMP prediction is performed on a global non-redundant peptide catalog
+ - Read-back mapping is replicate-aware and decoupled from assembly
  - Reproducible Conda environments (created if missing)
  - HPC-native design (Slurm + srun / sbatch arrays)
  - Transparent logging, resumability, and provenance
@@ -175,74 +186,18 @@ QC / Assembly:
   --qc-and-metaflye     Run QC, then submit Flye assemblies
 
 smORFs (on existing assemblies):
-  --smorfs-create-env   Create smORFs environment and exit (one-time)
+  --smorfs-create-env   Create smORFs environment and exit
   --smorfs-only         Submit smORFs job (assumes MetaFlye outputs exist)
-  --smorfs-sample STR   Run smORFs for ONE SampleID only (recommended for first run)
-  --run-smorfs          **Compatibility flag** (legacy); prefer --smorfs-only
+  --smorfs-sample STR   Run smORFs for ONE SampleID only
+  --run-smorfs          Compatibility flag (legacy)
 
-Downstream (MetaFlye logs):
-  --downstream-only          Run downstream analysis only (parse flye.log + boxplots)
+Downstream:
+  --downstream-only          Run downstream analysis only
   --run-downstream           Run downstream analysis in addition to selected steps
-  --metrics-env STR          Env name for downstream analysis (default: metaflye_metrics_env)
-</pre>
-
-<pre>
-MAIN OPTIONS
-------------
-Resources:
-  --partition STR       Slurm partition (default: short)
-  --time HH:MM:SS       Walltime per job/task
-  --cpus INT            CPUs per task
-  --mem STR             Memory per task
-  --wd PATH             Working directory
-
-QC diagnostics:
-  --run-porechop        Run porechop adapter/barcode diagnostics (OFF by default)
-
-Filtering (used only if --run-filtering is enabled):
-  --run-filtering       Enable trimming/filtering stage
-  --min-q INT           Mean read Q cutoff (default: 10)
-  --min-len INT         Minimum read length (default: 500 bp)
-  --max-len INT         Maximum read length (0 = disabled)
-
-  --no-adapter-trim     Skip adapter trimming
-  --no-barcode-trim     Skip barcode trimming
-  --demux               Enable demultiplexing
-  --no-poly-trim        Skip poly-A/T trimming
-  --no-filter           Skip NanoFilt Q/length filtering
-
-Batch control:
-  --batch-id STR        Batch identifier for QC outputs (default: batch1)
-
-smORFs options:
-  --smorfs-env STR      Conda env name for smORFs pipeline (default: smorfs_amps_env)
-  --funannotate-db PATH Funannotate DB dir (exported as FUNANNOTATE_DB_DIR)
-
-Downstream options:
-  --metrics-env STR     Conda env name for downstream analysis (default: metaflye_metrics_env)
-</pre>
-
-<pre>
-QC OUTPUTS
-----------
-results/qc_pre_filt/
-  fastqc/                         - per-file FastQC reports
-  multiqc/                        - aggregated MultiQC report
-
-  nanoplot/<batch>_raw/           - read length & quality distributions
-  nanostat/<batch>_raw/           - per-file NanoStat summaries
-  summary/
-    seqkit_stats_<batch>_raw.tsv  - SeqKit read statistics
-
-  adapter_barcode_checks/         - porechop diagnostics (if enabled)
-
-results/qc_post_filt/
-  nanoplot/<batch>_clean/
-  nanostat/<batch>_clean/
-  summary/
-    seqkit_stats_<batch>_clean.tsv
-
-Where <batch> corresponds to the value provided via --batch-id.
+  --run-downstream-amps      Enable AMP prediction (Macrel)
+  --run-downstream-map       Enable read-back mapping for abundance estimation
+  --downstream-full          Run downstream analysis + AMP prediction + mapping
+  --metrics-env STR          Env name for downstream analysis
 </pre>
 
 <pre>
@@ -250,26 +205,16 @@ ASSEMBLY OUTPUTS (MetaFlye)
 --------------------------
 results/assembly_metaflye/
   <SampleID>/
-    reads.coassembly.fastq.gz  - concatenated reads used for co-assembly
-    inputs.fastq.list          - FASTQs included in the co-assembly
-    assembly.fasta             - assembled contigs
-    assembly_info.txt          - contig stats and coverage
-    flye.log                   - Flye internal log
-  ...
-
-Reads are co-assembled per SampleID: all FASTQs mapped to the same
-SampleID (via metadata/metagenome_files.txt) are concatenated and
-assembled using Flye --meta.
-
-Assemblies are skipped automatically if output already exists,
-allowing safe re-runs and recovery from partial failures.
+    reads.coassembly.fastq.gz
+    inputs.fastq.list
+    assembly.fasta
+    assembly_info.txt
+    flye.log
 </pre>
 
 <pre>
 DOWNSTREAM OUTPUTS (MetaFlye logs)
 ---------------------------------
-Downstream analysis summarizes assembly behavior across SampleIDs using Flye logs only.
-
 Inputs:
   results/assembly_metaflye/<SampleID>/flye.log
 
@@ -279,178 +224,61 @@ Outputs:
 </pre>
 
 <pre>
-smORFs OUTPUTS
---------------
-smORFs are computed only on existing assemblies:
-  results/assembly_metaflye/<SampleID>/assembly.fasta
+DOWNSTREAM OUTPUTS (EXTENDED: AMP + ABUNDANCE)
+---------------------------------------------
+Additional downstream steps operate on existing assemblies and smORF outputs.
 
-Outputs are written to:
-  results/smorfs/<SampleID>/
+Global non-redundant peptide catalog:
+  results/catalog_global/global_nr_peptides.faa
 
-Per-sample outputs (typical):
-  results/smorfs/<SampleID>/
-    contigs/
-      low_confidence.ids              - contigs < 500 bp (flagged, not removed)
-      bac_contigs.fasta               - Tiara-classified prokaryotic contigs
-      fungi_contigs.fasta             - Tiara-classified eukaryotic contigs
-      other_contigs.fasta             - organelle/unknown contigs
-      classify/tiara.tsv              - Tiara classification table
+AMP prediction (Macrel):
+  results/catalog_global/amp_predictions.tsv
+  results/catalog_global/macrel_out_peptides/
 
-    bac/
-      prodigal/                       - Prodigal meta-mode genes/proteins
-      smorfinder/                     - SmORFinder outputs/logs
+Read-back mapping (per replicate):
+  results/catalog_global/mapping/
+    <replicate>.idxstats.tsv
+    <replicate>.mean_depth_per_contig.tsv
 
-    fungi/
-      funannotate_out/                - funannotate predict outputs/logs
-      fungi_le_100aa.faa              - fungal peptides <= 100 aa (flag)
-
-    catalog/
-      pooled.peptides.faa             - pooled bacterial + fungal peptides
-      nr_catalog_*                    - MMseqs2 clustering outputs
-
-Global (append-safe) summary tables:
-  results/smorfs/assembly_stats.tsv   - per SampleID assembly stats
-  results/smorfs/contig_stats.tsv     - per contig length + low-confidence flag
-</pre>
-
-<pre>
-smORFs MODEL (WHAT HAPPENS)
---------------------------
-1) Flag contigs < 500 bp as low-confidence (kept; not filtered out)
-2) Track per-site assembly stats into a single TSV
-3) Classify contigs to flag likely fungal contigs, then branch:
-     - Tiara labels contigs as prokaryotic vs eukaryotic (plus organelle/unknown)
-4) Bacterial branch:
-     - Prodigal (meta mode) baseline ORFs
-     - SmORFinder for small ORF enrichment/annotation
-5) Fungal branch:
-     - funannotate predict for eukaryotic gene prediction
-     - flag peptides <= 100 aa from predicted proteins
-6) Pool bacterial + fungal peptides, then de-replicate:
-     - MMseqs2 clustering to create a non-redundant peptide catalog
-</pre>
-
-<pre>
-PARALLELISM MODEL
------------------
-Assembly (MetaFlye):
- - One Slurm array task per SampleID
- - Each task concatenates that SampleID’s FASTQs and runs Flye --meta
-
-smORFs:
- - By default, smORFs can be run for a single SampleID (recommended first run)
- - You can also run smORFs for all SampleIDs listed in metadata/sample_ids.txt
- - **Current implementation runs SampleIDs sequentially within a single Slurm job**
- - **Array-based (one-task-per-assembly) smORFs is a planned extension**
-
-Downstream:
- - Downstream analysis can run independently from the rest of the pipeline
- - It reads Flye logs only and generates a metrics table + boxplots
-</pre>
-
-<pre>
-LOGGING & REPRODUCIBILITY
-------------------------
- - logs/qc_*.out / *.err
-     QC Slurm stdout/stderr
-
- - logs/metaflye_submit_*.out / *.err
-     MetaFlye submit logs
-
- - logs/smorfs_submit_*.out / *.err
-     smORFs submit logs (single job submission)
-
- - logs/downstream_*.out / *.err
-     Downstream analysis stdout/stderr (metrics + boxplots)
-
- - logs/command_*.txt
-     Full pipeline invocation and provenance
-
- - metadata/metagenome_files.txt
-     User-provided SampleID ↔ FASTQ mapping
-
- - metadata/metaflye_sampleids_*.list
-     SampleID → Slurm array task mapping
-
- - metadata/metaflye_sample_fastqs_*.tsv
-     Normalized SampleID ↔ FASTQ map (absolute paths)
+Mapping is performed per replicate, enabling aggregation
+at the SampleID or environment level downstream.
 </pre>
 
 <pre>
 EXAMPLES
 --------
 
-# 1) Default QC-only run (safe, read-only)
+# Default QC-only run
 bash workflow/runall.sh
 
-# 2) QC-only run with explicit batch labeling
-bash workflow/runall.sh --batch-id batch1
+# QC + MetaFlye
+bash workflow/runall.sh --qc-and-metaflye
 
-# 3) QC + porechop diagnostics (batch-aware)
-bash workflow/runall.sh --run-porechop --batch-id batch2
+# smORFs on one assembly
+bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500
 
-# 4) MetaFlye co-assembly only (skip QC)
-bash workflow/runall.sh --metaflye-only --cpus 16 --mem 64G --time 12:00:00
+# Downstream metrics only
+bash workflow/runall.sh --downstream-only
 
-# 5) QC followed by MetaFlye co-assembly
-bash workflow/runall.sh --qc-and-metaflye --batch-id batch1 --cpus 16 --mem 64G
+# Downstream + AMP prediction
+bash workflow/runall.sh --downstream-only --run-downstream-amps
 
-# 6) Advanced: QC + filtering + co-assembly
-bash workflow/runall.sh --qc-and-metaflye --run-filtering \
-  --batch-id batch2 --min-q 12 --min-len 1000
-
-# 7) One-time: create the smORFs environment
-bash workflow/runall.sh --smorfs-create-env
-
-# 8) smORFs on ONE existing assembly (recommended first run)
-bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500 --cpus 8 --mem 32G --time 04:00:00
-
-# 9) smORFs on ALL assemblies listed in metadata/sample_ids.txt (sequential in one job)
-#    NOTE: If metadata/sample_ids.txt does not exist, you must use --smorfs-sample.
-bash workflow/runall.sh --smorfs-only --cpus 8 --mem 32G --time 04:00:00
-
-Optional: funannotate database directory
-bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500 --funannotate-db /path/to/funannotate_db
-
-# 10) Downstream analysis only (flye.log -> metrics + boxplots)
-bash workflow/runall.sh --downstream-only --cpus 4 --mem 8G --time 01:00:00
-
-# 11) Run downstream in addition to selected steps (use only when Flye outputs already exist)
-bash workflow/runall.sh --smorfs-only --run-downstream --cpus 8 --mem 32G --time 04:00:00
-</pre>
-
-<pre>
-NOTES ON PORECHOP
-----------------
-Porechop is used ONLY as a diagnostic tool when --run-porechop is enabled.
-It does NOT modify FASTQ files.
-
-This is intentional, as modern ONT basecalling workflows
-(e.g. **MinKNOW + Guppy/Dorado**) already remove adapters in most workflows.
-The porechop step helps identify residual or unexpected adapter signals.
+# Full downstream (metrics + AMP + mapping)
+bash workflow/runall.sh --downstream-only --downstream-full
 </pre>
 
 <pre>
 CITATION
 --------
-If you use this pipeline, please cite:
-
 Lobo, I. (2026).
 smorfs_amps_predict: A reproducible pipeline for quality control,
-metagenome assembly, and on-demand smORF discovery of Nanopore shotgun data.
+metagenome assembly, and on-demand smORF and AMP discovery of
+Nanopore shotgun data.
 AY:RΔ — data and discovery in flow.
-
-See CITATION.cff for full citation metadata.
-</pre>
-
-<pre>
-CONTACT
--------
-ayrabioinf@gmail.com
-https://www.linkedin.com/company/aryaiam
 </pre>
 
 <p align="center"><sub>© 2026 AY:RΔ — data and discovery in flow</sub></p>
+
 
 
 
