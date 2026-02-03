@@ -229,6 +229,19 @@ def main() -> None:
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     workdir = args.workdir if args.workdir else (args.out.parent / "macrel_out_peptides")
+
+    # If output dir exists, Macrel exits. Remove it to allow reruns.
+    if workdir.exists():
+        # handle symlink safely
+        if workdir.is_symlink():
+            workdir.unlink()
+        else:
+            shutil.rmtree(workdir)
+
+    # sanity check: ensure it's really gone
+    if workdir.exists():
+        die(f"Could not remove existing Macrel output dir: {workdir}")
+
     workdir.mkdir(parents=True, exist_ok=True)
 
     # Build macrel command
