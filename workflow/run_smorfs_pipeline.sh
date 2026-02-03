@@ -117,8 +117,8 @@ ensure_env_once() {
 
     "${installer}" create -y -p "${ENV_PREFIX}" --override-channels \
       -c conda-forge -c bioconda \
-      python=3.8 \
-      numpy=1.19.4 \
+      python=3.10 \
+      "numpy>=1.23,<2" \
       biopython=1.78 \
       tiara=1.0.3 \
       funannotate \
