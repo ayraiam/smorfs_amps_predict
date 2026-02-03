@@ -117,17 +117,15 @@ ensure_env_once() {
 
     "${installer}" create -y -p "${ENV_PREFIX}" --override-channels \
       -c conda-forge -c bioconda \
-      python=3.10 \
-      "numpy>=1.23,<2" \
-      biopython=1.78 \
+      python=3.8 \
       tiara=1.0.3 \
       funannotate \
       prodigal \
       mmseqs2 \
       seqkit \
       csvtk \
-      pigz \
-      tensorflow-cpu=2.10
+      pigz
+
 
     msg "Env created: ${ENV_PREFIX}"
 
@@ -174,8 +172,13 @@ ensure_smorfs_tools() {
     msg "smorf found"
   fi
 
-  msg "Checking tensorflow import..."
-  python -c "import tensorflow as tf; print('tensorflow OK', tf.__version__)"
+  msg "Checking tensorflow import (optional)..."
+  if python -c "import tensorflow as tf; print(tf.__version__)" >/dev/null 2>&1; then
+    msg "tensorflow OK"
+  else
+    msg "tensorflow not present in this env (expected if using separate SmORFinder env)."
+  fi
+
 
   # Final hard checks
   command -v funannotate >/dev/null 2>&1 || die "funannotate still not found."
@@ -185,6 +188,47 @@ ensure_smorfs_tools() {
   msg "numpy version: $(python -c 'import numpy as np; print(np.__version__)')"
 
   msg "smorf + funannotate are ready."
+}
+
+# ---------------------------
+# SmORFinder + TensorFlow env
+# ---------------------------
+ensure_smorf_tf_env() {
+  init_conda
+
+  local TF_ENV_PREFIX="${ENV_PREFIX_DIR}/smorf_tf_env"
+  local lockdir="${TF_ENV_PREFIX}.lockdir"
+
+  if [[ -d "${TF_ENV_PREFIX}" ]]; then
+    msg "SmORFinder TF env exists: ${TF_ENV_PREFIX}"
+  else
+    while ! mkdir "${lockdir}" 2>/dev/null; do
+      msg "Waiting for SmORFinder TF env lock..."
+      sleep 5
+    done
+    trap 'rmdir "${lockdir}" 2>/dev/null || true' EXIT INT TERM
+
+    msg "Creating SmORFinder TF env at: ${TF_ENV_PREFIX}"
+
+    local installer="conda"
+    have_cmd mamba && installer="mamba"
+
+    "${installer}" create -y -p "${TF_ENV_PREFIX}" --override-channels \
+      -c conda-forge -c bioconda \
+      python=3.8 \
+      "numpy>=1.20.3,<2" \
+      pip
+
+    msg "Installing SmORFinder + TensorFlow (pip)"
+    conda run -p "${TF_ENV_PREFIX}" python -m pip install --upgrade pip setuptools wheel
+    conda run -p "${TF_ENV_PREFIX}" python -m pip install --no-deps smorfinder
+    conda run -p "${TF_ENV_PREFIX}" python -m pip install "tensorflow-cpu==2.10.*"
+
+    trap - EXIT INT TERM
+    rmdir "${lockdir}" 2>/dev/null || true
+  fi
+
+  msg "SmORFinder TF env ready: ${TF_ENV_PREFIX}"
 }
 
 # ---------------------------
@@ -361,19 +405,21 @@ run_smorfinder_bac() {
   local outdir="$3"
 
   mkdirp "${outdir}/bac/smorfinder"
-  if [[ ! -s "${bac_fa}" ]]; then
-    msg "[${sample_id}] No bacterial contigs FASTA found (empty). Skipping SmORFinder."
+  [[ -s "${bac_fa}" ]] || {
+    msg "[${sample_id}] No bacterial contigs FASTA found. Skipping SmORFinder."
     return 0
-  fi
+  }
 
-  msg "[${sample_id}] Running SmORFinder (meta) on bacterial contigs"
-  # SmORFinder quickstart: smorf meta myMetagenome.fna :contentReference[oaicite:11]{index=11}
-  # It also supports downloading needed data via `smorf` (no args) once installed. :contentReference[oaicite:12]{index=12}
-  ( cd "${outdir}/bac/smorfinder" && smorf meta "../../contigs/bac_contigs.fasta" --threads "${CPUS}" ) \
+  local TF_ENV_PREFIX="${ENV_PREFIX_DIR}/smorf_tf_env"
+
+  msg "[${sample_id}] Running SmORFinder (TF env)"
+  (
+    cd "${outdir}/bac/smorfinder" &&
+    conda run -p "${TF_ENV_PREFIX}" \
+      smorf meta "../../contigs/bac_contigs.fasta" --threads "${CPUS}"
+  ) \
     > "${outdir}/bac/smorfinder/smorfinder.stdout.log" \
     2> "${outdir}/bac/smorfinder/smorfinder.stderr.log" || true
-
-  # We don't assume an exact output filename; we’ll later "find" peptide FASTAs for pooling.
 }
 
 # ---------------------------
@@ -573,6 +619,7 @@ fi
 # MODE=run
 ensure_env_once
 ensure_smorfs_tools
+ensure_smorf_tf_env
 init_tables
 
 need_cmd seqkit
