@@ -54,42 +54,36 @@ def macrel_supports_threads() -> bool:
 
 def find_prediction_file(outdir: Path) -> Path:
     """
-    Macrel writes outputs into the output folder. The docs refer to an
-    'expected.prediction' file in tests. We locate any file containing 'prediction'
-    in its name, preferring a non-empty tabular file. :contentReference[oaicite:2]{index=2}
+    Macrel peptides mode writes: macrel.out.prediction.gz (or <tag>.prediction.gz).
+    Prefer that file explicitly.
     """
     if not outdir.exists():
         die(f"Macrel output dir not found: {outdir}")
 
+    # Best/expected candidates first
+    preferred = []
+    for p in outdir.rglob("*"):
+        if not p.is_file():
+            continue
+        name = p.name.lower()
+        if name.endswith(".prediction.gz") or name.endswith(".out.prediction.gz"):
+            if p.stat().st_size > 0:
+                preferred.append(p)
+
+    if preferred:
+        preferred.sort(key=lambda x: (len(x.parts), x.stat().st_size))
+        return preferred[0]
+
+    # Fallback: anything with "prediction" in the name that isn't empty
     candidates = []
     for p in outdir.rglob("*"):
-        if p.is_file() and "prediction" in p.name.lower():
-            # skip logs if any
-            if p.suffix.lower() in {".log", ".err", ".out"}:
-                continue
-            if p.stat().st_size == 0:
-                continue
+        if p.is_file() and "prediction" in p.name.lower() and p.stat().st_size > 0:
             candidates.append(p)
-
-    if not candidates:
-        # fallback: sometimes tools write "predictions" etc.
-        for p in outdir.rglob("*"):
-            if p.is_file() and re.search(r"predic", p.name.lower()):
-                if p.stat().st_size > 0:
-                    candidates.append(p)
 
     if not candidates:
         die(f"Could not find any prediction table inside: {outdir}")
 
-    # prefer smallest depth + most likely table extensions
-    preferred_ext = [".tsv", ".txt", ".csv", ".prediction", ""]
-    candidates.sort(
-        key=lambda x: (
-            0 if x.suffix.lower() in preferred_ext else 1,
-            len(x.parts),
-            x.stat().st_size,
-        )
-    )
+    candidates.sort(key=lambda x: (len(x.parts), x.stat().st_size))
     return candidates[0]
 
 
@@ -125,11 +119,19 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Try to map known/likely names
     colmap = {}
     for c in df.columns:
-        lc = c.lower()
-        if lc in {"accession", "access_code", "access code", "id", "name", "seqid"}:
+        lc = str(c).strip().lower()
+        if lc in {"access", "accession", "access_code", "access code", "id", "name", "seqid"}:
             colmap[c] = "peptide_id"
         elif lc in {"sequence", "peptide", "peptide_sequence", "peptide sequence", "seq"}:
             colmap[c] = "peptide_seq"
+        elif lc in {"amp_probability"}:
+            colmap[c] = "amp_prob"
+        elif lc in {"hemolytic_probability"}:
+            colmap[c] = "hemo_prob"
+        elif lc in {"hemolytic"}:
+            colmap[c] = "hemo_pred"
+        elif lc in {"amp_family"}:
+            colmap[c] = "macrel_class"
         elif "prob" in lc and ("amp" in lc or "antimicrobial" in lc):
             colmap[c] = "amp_prob"
         elif ("amp" in lc or "antimicrobial" in lc) and "prob" not in lc:
@@ -263,7 +265,14 @@ def main() -> None:
 
     pred_file = find_prediction_file(workdir)
     sep = sniff_sep(pred_file)
-    df = pd.read_csv(pred_file, sep=sep, engine="python")
+    # Macrel adds comment header lines starting with '#'
+    df = pd.read_csv(
+        pred_file,
+        sep="\t",              # macrel prediction is TSV
+        comment="#",           # skip version header lines
+        compression="infer",   # handles .gz automatically
+        engine="python",
+    )
 
     norm = normalize_columns(df)
 
