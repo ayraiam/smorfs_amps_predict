@@ -9,16 +9,16 @@ def parse_flye_log(log_path: Path) -> dict:
     Best-effort parser for Flye/MetaFlye flye.log.
 
     IMPORTANT UNITS:
-      - total_reads_bp     : stored in Mb (bp -> Mb)
-      - total_assembly_bp  : stored in Mb (bp -> Mb)
+      - total_reads_mp     : stored in Mb (bp -> Mb)
+      - total_assembly_mp  : stored in Mb (bp -> Mb)
       - assembly_yield_pct : (assembled Mb / sequenced Mb) * 100
     """
     text = log_path.read_text(errors="replace").splitlines()
 
     out = {
         "site": log_path.parent.name,
-        "total_reads_bp": None,        # Mb
-        "total_assembly_bp": None,     # Mb
+        "total_reads_mp": None,        # Mb
+        "total_assembly_mp": None,     # Mb
         "assembly_yield_pct": None,    # %
         "contigs": None,
         "n50_bp": None,
@@ -28,11 +28,11 @@ def parse_flye_log(log_path: Path) -> dict:
     }
 
     patterns = {
-        "total_reads_bp": [
+        "total_reads_mp": [
             re.compile(r"Total read length:\s*([0-9]+)"),
             re.compile(r"Total reads length:\s*([0-9]+)"),
         ],
-        "total_assembly_bp": [
+        "total_assembly_mp": [
             re.compile(r"Total length:\s*([0-9]+)"),
             re.compile(r"Total length of contigs:\s*([0-9]+)"),
             re.compile(r"Total assembled length:\s*([0-9]+)"),
@@ -59,12 +59,12 @@ def parse_flye_log(log_path: Path) -> dict:
     for line in text:
         line = line.strip()
 
-        for rx in patterns["total_reads_bp"]:
+        for rx in patterns["total_reads_mp"]:
             m = rx.search(line)
             if m:
                 reads_bp_raw = int(m.group(1))
 
-        for rx in patterns["total_assembly_bp"]:
+        for rx in patterns["total_assembly_mp"]:
             m = rx.search(line)
             if m:
                 assembly_bp_raw = int(m.group(1))
@@ -91,18 +91,18 @@ def parse_flye_log(log_path: Path) -> dict:
 
     # ---- unit conversion: bp -> Mb ----
     if reads_bp_raw is not None:
-        out["total_reads_bp"] = reads_bp_raw / 1e6
+        out["total_reads_mp"] = reads_bp_raw / 1e6
 
     if assembly_bp_raw is not None:
-        out["total_assembly_bp"] = assembly_bp_raw / 1e6
+        out["total_assembly_mp"] = assembly_bp_raw / 1e6
 
     # ---- assembly yield (%) ----
     if (
-        out["total_reads_bp"] not in (None, 0)
-        and out["total_assembly_bp"] is not None
+        out["total_reads_mp"] not in (None, 0)
+        and out["total_assembly_mp"] is not None
     ):
         out["assembly_yield_pct"] = (
-            100.0 * out["total_assembly_bp"] / out["total_reads_bp"]
+            100.0 * out["total_assembly_mp"] / out["total_reads_mp"]
         )
 
     return out
@@ -115,8 +115,8 @@ def usage():
         "  <BASE_RESULTS_DIR>/assembly_metaflye/*/flye.log\n"
         "\n"
         "Output units:\n"
-        "  total_reads_bp     : Mb\n"
-        "  total_assembly_bp  : Mb\n"
+        "  total_reads_mp     : Mb\n"
+        "  total_assembly_mp  : Mb\n"
         "  assembly_yield_pct : %\n"
     )
 
@@ -147,8 +147,8 @@ def main():
 
     cols = [
         "site",
-        "total_reads_bp",
-        "total_assembly_bp",
+        "total_reads_mp",
+        "total_assembly_mp",
         "assembly_yield_pct",
         "contigs",
         "n50_bp",
