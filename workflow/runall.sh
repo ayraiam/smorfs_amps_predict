@@ -363,6 +363,17 @@ if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
   echo "  ${DS_OUT_LOG}"
   echo "  ${DS_ERR_LOG}"
 
+  # Build downstream CLI arguments
+  DS_ARGS=( --results-dir "$RESULTS_DIR" --metrics-env "$METRICS_ENV" )
+
+  if [[ "${RUN_DOWNSTREAM_AMPS}" -eq 1 ]]; then
+    DS_ARGS+=( --run-amps )
+  fi
+
+  if [[ "${RUN_DOWNSTREAM_MAP}" -eq 1 ]]; then
+    DS_ARGS+=( --run-map )
+  fi
+
   srun \
     --partition="$PARTITION" \
     --nodes=1 \
@@ -371,10 +382,9 @@ if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
     --mem="$MEM" \
     --time="$TIME" \
     --chdir="$WDIR" \
-    --export=ALL,RESULTS_DIR="$RESULTS_DIR",METRICS_ENV="$METRICS_ENV" \
+    --export=ALL,RESULTS_DIR="$RESULTS_DIR",METRICS_ENV="$METRICS_ENV",CPUS="$CPUS" \
     /bin/bash workflow/downstream_analysis.sh \
-      --results-dir "$RESULTS_DIR" \
-      --metrics-env "$METRICS_ENV" \
+      "${DS_ARGS[@]}" \
     >>"$DS_OUT_LOG" 2>>"$DS_ERR_LOG"
 fi
 
