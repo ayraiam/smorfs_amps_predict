@@ -242,8 +242,6 @@ def main() -> None:
     if workdir.exists():
         die(f"Could not remove existing Macrel output dir: {workdir}")
 
-    workdir.mkdir(parents=True, exist_ok=True)
-
     # Build macrel command
     cmd = [args.macrel_bin, "peptides", "--fasta", str(args.fasta), "--output", str(workdir)]
     # Optional flags if supported
@@ -252,12 +250,16 @@ def main() -> None:
     if macrel_supports_threads():
         cmd += ["--threads", str(args.threads)]
 
-    # If output dir exists, Macrel exits. Remove it to allow reruns.
+    # IMPORTANT: Macrel fails if output directory exists.
+    # Ensure it does NOT exist right before running.
     if workdir.exists():
-        shutil.rmtree(workdir)
-    workdir.mkdir(parents=True, exist_ok=True)
+        if workdir.is_symlink():
+            workdir.unlink()
+        else:
+            shutil.rmtree(workdir)
 
     run(cmd)
+
 
     pred_file = find_prediction_file(workdir)
     sep = sniff_sep(pred_file)
