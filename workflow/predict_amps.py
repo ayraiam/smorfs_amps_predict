@@ -239,6 +239,11 @@ def main() -> None:
     if macrel_supports_threads():
         cmd += ["--threads", str(args.threads)]
 
+    # If output dir exists, Macrel exits. Remove it to allow reruns.
+    if workdir.exists():
+        shutil.rmtree(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+
     run(cmd)
 
     pred_file = find_prediction_file(workdir)
