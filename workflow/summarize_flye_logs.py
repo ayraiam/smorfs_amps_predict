@@ -7,14 +7,19 @@ import pandas as pd
 def parse_flye_log(log_path: Path) -> dict:
     """
     Best-effort parser for Flye/MetaFlye flye.log.
-    Scans lines and matches known patterns; keeps last match per metric.
+
+    IMPORTANT UNITS:
+      - total_reads_bp     : stored in Mb (bp -> Mb)
+      - total_assembly_bp  : stored in Mb (bp -> Mb)
+      - assembly_yield_pct : (assembled Mb / sequenced Mb) * 100
     """
     text = log_path.read_text(errors="replace").splitlines()
 
     out = {
         "site": log_path.parent.name,
-        "total_reads_bp": None,        # WILL BE STORED IN Mb
-        "total_assembly_mb": None,
+        "total_reads_bp": None,        # Mb
+        "total_assembly_bp": None,     # Mb
+        "assembly_yield_pct": None,    # %
         "contigs": None,
         "n50_bp": None,
         "largest_bp": None,
@@ -48,8 +53,8 @@ def parse_flye_log(log_path: Path) -> dict:
         ],
     }
 
-    assembly_bp = None
-    reads_bp = None
+    reads_bp_raw = None
+    assembly_bp_raw = None
 
     for line in text:
         line = line.strip()
@@ -57,12 +62,12 @@ def parse_flye_log(log_path: Path) -> dict:
         for rx in patterns["total_reads_bp"]:
             m = rx.search(line)
             if m:
-                reads_bp = int(m.group(1))
+                reads_bp_raw = int(m.group(1))
 
         for rx in patterns["total_assembly_bp"]:
             m = rx.search(line)
             if m:
-                assembly_bp = int(m.group(1))
+                assembly_bp_raw = int(m.group(1))
 
         for rx in patterns["contigs"]:
             m = rx.search(line)
@@ -84,12 +89,21 @@ def parse_flye_log(log_path: Path) -> dict:
             if m:
                 out["mean_cov"] = float(m.group(1))
 
-    # Convert units
-    if reads_bp is not None:
-        out["total_reads_bp"] = reads_bp / 1e6   # bp → Mb
+    # ---- unit conversion: bp -> Mb ----
+    if reads_bp_raw is not None:
+        out["total_reads_bp"] = reads_bp_raw / 1e6
 
-    if assembly_bp is not None:
-        out["total_assembly_mb"] = assembly_bp / 1e6
+    if assembly_bp_raw is not None:
+        out["total_assembly_bp"] = assembly_bp_raw / 1e6
+
+    # ---- assembly yield (%) ----
+    if (
+        out["total_reads_bp"] not in (None, 0)
+        and out["total_assembly_bp"] is not None
+    ):
+        out["assembly_yield_pct"] = (
+            100.0 * out["total_assembly_bp"] / out["total_reads_bp"]
+        )
 
     return out
 
@@ -100,7 +114,10 @@ def usage():
         "Parses Flye/MetaFlye flye.log files under:\n"
         "  <BASE_RESULTS_DIR>/assembly_metaflye/*/flye.log\n"
         "\n"
-        "Writes a TSV table (one row per SampleID/site).\n"
+        "Output units:\n"
+        "  total_reads_bp     : Mb\n"
+        "  total_assembly_bp  : Mb\n"
+        "  assembly_yield_pct : %\n"
     )
 
 def main():
@@ -109,7 +126,6 @@ def main():
         sys.exit(0 if len(sys.argv) >= 2 else 1)
 
     base_results = Path(sys.argv[1]).resolve()
-
     out_tsv = base_results / "assembly_metaflye" / "finalize_metrics.tsv"
 
     argv = sys.argv[2:]
@@ -122,7 +138,9 @@ def main():
 
     logs = sorted(base_results.glob("assembly_metaflye/*/flye.log"))
     if not logs:
-        raise SystemExit(f"No flye.log found under: {base_results}/assembly_metaflye/*/flye.log")
+        raise SystemExit(
+            f"No flye.log found under: {base_results}/assembly_metaflye/*/flye.log"
+        )
 
     rows = [parse_flye_log(p) for p in logs]
     df = pd.DataFrame(rows)
@@ -130,7 +148,8 @@ def main():
     cols = [
         "site",
         "total_reads_bp",
-        "total_assembly_mb",
+        "total_assembly_bp",
+        "assembly_yield_pct",
         "contigs",
         "n50_bp",
         "largest_bp",
