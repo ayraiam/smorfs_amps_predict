@@ -89,7 +89,8 @@ ensure_env_once() {
       r-base=4.3 \
       r-ggplot2 \
       r-readr \
-      r-dplyr
+      r-dplyr \
+      r-ggbeeswarm
 
     msg "Env created: ${ENV_PREFIX}"
 
