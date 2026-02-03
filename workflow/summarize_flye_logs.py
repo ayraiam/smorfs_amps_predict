@@ -33,18 +33,24 @@ def parse_flye_log(log_path: Path) -> dict:
             re.compile(r"Total assembled length:\s*([0-9]+)"),
         ],
         "contigs": [
-            re.compile(r"Contigs:\s*([0-9]+)"),
-            re.compile(r"Total contigs:\s*([0-9]+)"),
-            re.compile(r"Assembly graph:\s*([0-9]+)\s+nodes"),  # fallback (approx)
+            # Flye often prints something like:
+            #   Fragments: <N>
+            # or
+            #   Fragments <N>
+            re.compile(r"^\s*Fragments\s*[:=]\s*([0-9]+)\s*$"),
+            re.compile(r"^\s*Fragments\s+([0-9]+)\s*$"),
         ],
         "n50_bp": [
-            re.compile(r"\bN50\b[:=]?\s*([0-9]+)"),
-            re.compile(r"Contigs N50:\s*([0-9]+)"),
+            # Example:
+            #   Fragments N50: <N>
+            re.compile(r"^\s*Fragments\s+N50\s*[:=]\s*([0-9]+)\s*$"),
         ],
         "largest_bp": [
-            re.compile(r"Largest(?: contig)?:\s*([0-9]+)"),
-            re.compile(r"Max(?: contig)?:\s*([0-9]+)"),
+            # Example:
+            #   Largest frg: <N>
+            re.compile(r"^\s*Largest\s+frg\s*[:=]\s*([0-9]+)\s*$"),
         ],
+
         "mean_cov": [
             re.compile(r"Mean coverage:\s*([0-9]+(?:\.[0-9]+)?)"),
             re.compile(r"Mean cov(?:erage)?:\s*([0-9]+(?:\.[0-9]+)?)"),
