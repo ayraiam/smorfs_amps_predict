@@ -38,6 +38,9 @@ MAP_PRESENT="metadata/metaflye_sample_fastqs_${TS}.tsv"
 
 STRICT_METADATA=0
 
+GLOBAL_ASSEMBLY=0
+GLOBAL_ID="GLOBAL"
+
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 usage() {
@@ -54,6 +57,10 @@ Batch-safe default behavior:
 Options:
   --strict-metadata
     Also require that every FASTQ listed in METADATA_MAP exists in FASTQ_DIR.
+  --global
+    Assemble ALL FASTQs present in FASTQ_DIR into ONE assembly (single SampleID).
+  --global-id STR
+    SampleID name to use for global co-assembly (default: GLOBAL)
 
 EOF
   exit 0
@@ -62,6 +69,8 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --strict-metadata) STRICT_METADATA=1; shift 1 ;;
+    --global) GLOBAL_ASSEMBLY=1; shift 1 ;;
+    --global-id) GLOBAL_ID="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) die "Unknown argument: $1 (try --help)" ;;
   esac
@@ -300,6 +309,18 @@ build_present_only_map() {
   rm -f "$lut" "metadata/.tmp_present_basenames_${TS}.txt" "metadata/.tmp_meta_basenames_${TS}.txt" 2>/dev/null || true
 }
 
+build_global_map() {
+  # Output: GLOBAL_ID<TAB>ABS_FASTQ for ALL FASTQs present now
+  local out="$1"
+  : > "$out"
+
+  while IFS= read -r absf; do
+    echo -e "${GLOBAL_ID}\t${absf}" >> "$out"
+  done < <(list_fastqs_present_abs)
+
+  [[ -s "$out" ]] || die "No FASTQs found to build global map from ${FASTQ_DIR}/"
+}
+
 build_sample_list() {
   local map="$1"
   local out="$2"
@@ -347,11 +368,18 @@ submit_array() {
 }
 
 # --------------------------- Main ---------------------------
-TMP_NORM="metadata/.tmp_norm_${TS}.tsv"
+if [[ "${GLOBAL_ASSEMBLY}" -eq 1 ]]; then
+  echo ">>> GLOBAL co-assembly mode: all FASTQs in ${FASTQ_DIR} -> SampleID=${GLOBAL_ID}"
+  build_global_map "${MAP_PRESENT}"
+  echo "${GLOBAL_ID}" > "${SAMPLE_LIST}"
+  submit_array "${SAMPLE_LIST}" "${MAP_PRESENT}"
+else
+  TMP_NORM="metadata/.tmp_norm_${TS}.tsv"
 
-normalize_map_to_tsv "${METADATA_MAP}" "${TMP_NORM}"
-build_present_only_map "${TMP_NORM}" "${MAP_PRESENT}"
-rm -f "${TMP_NORM}" || true
+  normalize_map_to_tsv "${METADATA_MAP}" "${TMP_NORM}"
+  build_present_only_map "${TMP_NORM}" "${MAP_PRESENT}"
+  rm -f "${TMP_NORM}" || true
 
-build_sample_list "${MAP_PRESENT}" "${SAMPLE_LIST}"
-submit_array "${SAMPLE_LIST}" "${MAP_PRESENT}"
+  build_sample_list "${MAP_PRESENT}" "${SAMPLE_LIST}"
+  submit_array "${SAMPLE_LIST}" "${MAP_PRESENT}"
+fi
