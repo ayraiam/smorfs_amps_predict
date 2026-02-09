@@ -45,76 +45,32 @@ STRUCTURE
  /workflow/
    runall.sh                    - main Slurm launcher (QC + assembly; optional smORFs submission)
    run_libsQC.sh                - QC logic (FastQC, NanoPlot, NanoStat, SeqKit)
-   submit_metaflye_array.sh     - submits Flye Slurm array (1 SampleID per task; co-assembly)
-   metaflye_array_task.sh       - per-array-task Flye runner (co-assembly; uses scratch for temp reads)
-   run_smorfs_pipeline.sh       - smORFs pipeline on assemblies (Tiara → Prodigal/SmORFinder or funannotate → MMseqs2)
+   submit_metaflye_array.sh     - submits Flye Slurm array (per-sample or global co-assembly)
+   metaflye_array_task.sh       - per-array-task Flye runner (uses scratch for temp reads)
+   run_smorfs_pipeline.sh       - smORFs pipeline on assemblies
    downstream_analysis.sh       - downstream analysis (Flye metrics, AMP prediction, read-back mapping)
    summarize_flye_logs.py       - parse Flye logs into a metrics table
    plot_metaflye_metrics.R      - generate per-metric boxplots from metrics TSV
-   predict_amps.py              - AMP prediction using Macrel (global NR peptides)
+   predict_amps.py              - AMP prediction using Macrel
  /envs/                         - Conda environments (created on demand)
  /logs/                         - timestamped Slurm logs
  /metadata/
-   metagenome_files.txt         - SampleID ↔ FASTQ mapping (user-provided)
+   metagenome_files.txt         - SampleID ↔ FASTQ mapping (per-sample mode)
    metaflye_sampleids_*.list    - SampleID → array task mapping
    metaflye_sample_fastqs_*.tsv - SampleID ↔ FASTQ map (absolute paths, normalized)
-   sample_ids.txt               - list of SampleIDs for smORFs runs (one per line)
- /data/                         - input FASTQ(.gz) files (read-only)
+   sample_ids.txt               - list of SampleIDs for smORFs runs
+ /data/                         - input FASTQ(.gz) files (read-only; may be symlinks)
  /results/
    qc_pre_filt/                 - QC outputs on raw reads (batch-aware)
-   qc_post_filt/                - QC outputs after filtering (optional; batch-aware)
-   assembly_metaflye/           - per-sample Flye metagenome assemblies
-     finalize_metrics.tsv       - downstream: aggregated Flye assembly metrics
-     finalize_boxplots/         - downstream: boxplots summarizing Flye metrics
-   smorfs/                      - per-sample smORF outputs + global summary TSVs
-   catalog_global/              - global NR peptides, AMP predictions, mapping outputs
+   qc_post_filt/                - QC outputs after filtering (optional)
+   assembly_metaflye/           - MetaFlye assemblies (per-sample or global)
+     finalize_metrics.tsv
+     finalize_boxplots/
+   smorfs/
+   catalog_global/
  README.md
  LICENSE
  CITATION.cff
-</pre>
-
-<pre>
-DEPENDENCIES
-------------
- - Linux
- - Bash ≥ 4
- - Conda or Mamba
- - Slurm (or compatible scheduler)
-
-QC + assembly environments (created automatically as needed) install:
- - FastQC
- - MultiQC
- - NanoPlot
- - NanoStat
- - SeqKit
- - Cutadapt
- - NanoFilt
- - Porechop (diagnostic only)
- - Flye (metagenome mode; Flye --meta)
-
-smORFs environment (created on demand) installs:
- - Prodigal (meta mode)
- - Tiara (contig classification; euk vs prok)
- - SmORFinder (bacterial smORF enrichment/annotation)
- - funannotate (eukaryotic gene prediction on fungal contigs)
- - MMseqs2 (non-redundant peptide catalog)
- - SeqKit (FASTA utilities)
-
-Downstream analysis environment (created on first run of downstream_analysis.sh) installs:
- - Python ≥ 3.10
- - pandas
- - matplotlib
- - R ≥ 4.3
- - ggplot2
- - readr
- - dplyr
- - ggbeeswarm
- - MMseqs2
- - minimap2
- - samtools
- - bedtools
- - seqkit
- - macrel
 </pre>
 
 <pre>
@@ -122,79 +78,29 @@ DESIGN PRINCIPLES
 -----------------
  - Explicit separation of QC, assembly, smORFs, and downstream analysis stages
  - QC-only by default (no FASTQ files are modified)
- - Assembly is opt-in and fully parallelized (Slurm arrays)
- - Co-assembly is performed per biological sample (SampleID)
- - smORFs are opt-in and run only when explicitly requested
- - Downstream analysis is opt-in and can run independently
- - AMP prediction is performed on a global non-redundant peptide catalog
- - Read-back mapping is replicate-aware and decoupled from assembly
+ - Assembly is opt-in and parallelized via Slurm arrays
+ - Supports both per-sample and global co-assembly modes
+ - smORFs and downstream analysis are opt-in and decoupled
+ - AMP prediction operates on a global non-redundant peptide catalog
  - Reproducible Conda environments (created if missing)
- - HPC-native design (Slurm + srun / sbatch arrays)
+ - HPC-native design (Slurm + srun / sbatch)
  - Transparent logging, resumability, and provenance
  - Batch-aware QC for multi-run and longitudinal projects
- - Large temporary files are written to scratch storage and cleaned up automatically
+ - Large temporary files are written to scratch and cleaned up automatically
 </pre>
 
 <pre>
 SCRATCH USAGE
-------------------------
+-------------
 For disk safety and scalability, large temporary co-assembly FASTQ files
 are written to scratch storage during MetaFlye runs and deleted automatically
 after assembly completes.
 
 Specifically:
- - Co-assembled reads (reads.coassembly.fastq.gz) are written to:
+ - Co-assembled reads are written to:
      /scratch/t.sousa/data_used/metaflye_tmp/<SampleID>/
  - These files are removed automatically after Flye finishes
  - Final assemblies, logs, and metrics are always written to the project directory
-
-This design prevents project disk exhaustion while preserving full reproducibility.
-</pre>
-       
-<pre>
-BATCH AWARE QC
---------------
-The QC stage supports explicit batch labeling via a user-defined
-batch identifier.
-
-This enables:
- - Direct comparison of multiple sequencing batches
- - Preservation of independent NanoPlot / NanoStat outputs
- - Safe re-analysis without overwriting previous QC results
-
-Batch labeling affects:
- - NanoPlot outputs
- - NanoStat summaries
- - SeqKit read statistics
-
-No FASTQ files are ever modified.
-</pre>
-
-<pre>
-USAGE
------
-Place FASTQ or FASTQ.GZ files in the `data/` directory.
-
-Provide a mapping file at:
-  metadata/metagenome_files.txt
-
-This file must associate each FASTQ file with a SampleID.
-It can be tab-, comma-, or space-delimited, with or without a header.
-
-Example:
-  SampleID    FASTQ_Filename
-  S01         lib1.fastq.gz
-  S01         lib2.fastq.gz
-  S02         lib3.fastq.gz
-
-Run the main launcher:
-  bash workflow/runall.sh [options]
-
-By default:
- - Only the QC stage is executed
- - FASTQ files are never modified
- - No assembly is performed unless explicitly requested
- - No smORFs are run unless explicitly requested
 </pre>
 
 <pre>
@@ -206,10 +112,10 @@ in the data/ directory.
 
 In global mode:
  - All libraries are merged into one co-assembly
- - A single Flye run is submitted
- - Temporary merged reads are written to scratch and deleted after completion
+ - A single Flye job is submitted
+ - Temporary merged reads are written to scratch and deleted automatically
  - Output is written to:
-     results/assembly_metaflye/GLOBAL/
+     results/assembly_metaflye/<GLOBAL_ID>/
 </pre>
 
 <pre>
@@ -218,21 +124,23 @@ STEP CONTROL
 QC / Assembly:
   --qc-only             Run only QC (default behavior)
   --metaflye-only       Run only metagenome assembly (skip QC)
-  --qc-and-metaflye     Run QC, then submit Flye assemblies
+  --qc-and-metaflye     Run QC, then submit MetaFlye
 
-smORFs (on existing assemblies):
-  --smorfs-create-env   Create smORFs environment and exit
-  --smorfs-only         Submit smORFs job (assumes MetaFlye outputs exist)
-  --smorfs-sample STR   Run smORFs for ONE SampleID only
-  --run-smorfs          Compatibility flag (legacy)
+MetaFlye modes:
+  --global              Enable single global co-assembly across all FASTQs
+  --global-id STR       SampleID name for global assembly (default: GLOBAL)
+
+smORFs:
+  --smorfs-create-env
+  --smorfs-only
+  --smorfs-sample STR
 
 Downstream:
-  --downstream-only          Run downstream analysis only
-  --run-downstream           Run downstream analysis in addition to selected steps
-  --run-downstream-amps      Enable AMP prediction (Macrel)
-  --run-downstream-map       Enable read-back mapping for abundance estimation
-  --downstream-full          Run downstream analysis + AMP prediction + mapping
-  --metrics-env STR          Env name for downstream analysis
+  --downstream-only
+  --run-downstream
+  --run-downstream-amps
+  --run-downstream-map
+  --downstream-full
 </pre>
 
 <pre>
@@ -244,66 +152,30 @@ results/assembly_metaflye/
     assembly_info.txt
     flye.log
 
-Temporary (auto-deleted) during assembly:
+Temporary (auto-deleted):
   /scratch/t.sousa/data_used/metaflye_tmp/<SampleID>/
     reads.coassembly.fastq.gz
     inputs.fastq.list
-
-</pre>
-
-<pre>
-DOWNSTREAM OUTPUTS (MetaFlye logs)
----------------------------------
-Inputs:
-  results/assembly_metaflye/<SampleID>/flye.log
-
-Outputs:
-  results/assembly_metaflye/finalize_metrics.tsv
-  results/assembly_metaflye/finalize_boxplots/boxplot_*.png
-</pre>
-
-<pre>
-DOWNSTREAM OUTPUTS (EXTENDED: AMP + ABUNDANCE)
----------------------------------------------
-Additional downstream steps operate on existing assemblies and smORF outputs.
-
-Global non-redundant peptide catalog:
-  results/catalog_global/global_nr_peptides.faa
-
-AMP prediction (Macrel):
-  results/catalog_global/amp_predictions.tsv
-  results/catalog_global/macrel_out_peptides/
-
-Read-back mapping (per replicate):
-  results/catalog_global/mapping/
-    <replicate>.idxstats.tsv
-    <replicate>.mean_depth_per_contig.tsv
-
-Mapping is performed per replicate, enabling aggregation
-at the SampleID or environment level downstream.
 </pre>
 
 <pre>
 EXAMPLES
 --------
 
-# Default QC-only run
+# QC only
 bash workflow/runall.sh
 
-# QC + MetaFlye
+# QC + per-sample MetaFlye
 bash workflow/runall.sh --qc-and-metaflye
+
+# Global co-assembly (default ID = GLOBAL)
+bash workflow/runall.sh --metaflye-only --global
+
+# Global co-assembly with custom ID
+bash workflow/runall.sh --metaflye-only --global --global-id UNIFORME_GLOBAL
 
 # smORFs on one assembly
 bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500
-
-# Downstream metrics only
-bash workflow/runall.sh --downstream-only
-
-# Downstream + AMP prediction
-bash workflow/runall.sh --downstream-only --run-downstream-amps
-
-# Full downstream (metrics + AMP + mapping)
-bash workflow/runall.sh --downstream-only --downstream-full
 </pre>
 
 <pre>
@@ -317,8 +189,3 @@ AY:RΔ — data and discovery in flow.
 </pre>
 
 <p align="center"><sub>© 2026 AY:RΔ — data and discovery in flow</sub></p>
-
-
-
-
-
