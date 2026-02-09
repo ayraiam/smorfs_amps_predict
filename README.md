@@ -22,7 +22,10 @@ for downstream smORF and antimicrobial peptide (AMP) discovery.
 
 The pipeline combines:
   1) Read-level quality control and diagnostics (safe, read-only by default)
-  2) Scalable metagenome co-assembly using Flye (--meta), parallelized via Slurm arrays
+  2) Scalable metagenome co-assembly using Flye (--meta), supporting both:
+     - per-sample (SampleID) co-assemblies
+     - single global co-assembly across all libraries
+     Parallelized via Slurm arrays
   3) Optional, on-demand smORF prediction (bacterial + fungal) on existing assemblies
   4) Optional downstream analysis of MetaFlye assemblies (flye.log → metrics TSV + boxplots)
 
@@ -43,7 +46,7 @@ STRUCTURE
    runall.sh                    - main Slurm launcher (QC + assembly; optional smORFs submission)
    run_libsQC.sh                - QC logic (FastQC, NanoPlot, NanoStat, SeqKit)
    submit_metaflye_array.sh     - submits Flye Slurm array (1 SampleID per task; co-assembly)
-   metaflye_array_task.sh       - per-array-task Flye runner (co-assembly)
+   metaflye_array_task.sh       - per-array-task Flye runner (co-assembly; uses scratch for temp reads)
    run_smorfs_pipeline.sh       - smORFs pipeline on assemblies (Tiara → Prodigal/SmORFinder or funannotate → MMseqs2)
    downstream_analysis.sh       - downstream analysis (Flye metrics, AMP prediction, read-back mapping)
    summarize_flye_logs.py       - parse Flye logs into a metrics table
@@ -87,7 +90,7 @@ QC + assembly environments (created automatically as needed) install:
  - Cutadapt
  - NanoFilt
  - Porechop (diagnostic only)
- - Flye
+ - Flye (metagenome mode; Flye --meta)
 
 smORFs environment (created on demand) installs:
  - Prodigal (meta mode)
@@ -129,8 +132,25 @@ DESIGN PRINCIPLES
  - HPC-native design (Slurm + srun / sbatch arrays)
  - Transparent logging, resumability, and provenance
  - Batch-aware QC for multi-run and longitudinal projects
+ - Large temporary files are written to scratch storage and cleaned up automatically
 </pre>
 
+<pre>
+SCRATCH USAGE
+------------------------
+For disk safety and scalability, large temporary co-assembly FASTQ files
+are written to scratch storage during MetaFlye runs and deleted automatically
+after assembly completes.
+
+Specifically:
+ - Co-assembled reads (reads.coassembly.fastq.gz) are written to:
+     /scratch/t.sousa/data_used/metaflye_tmp/<SampleID>/
+ - These files are removed automatically after Flye finishes
+ - Final assemblies, logs, and metrics are always written to the project directory
+
+This design prevents project disk exhaustion while preserving full reproducibility.
+</pre>
+       
 <pre>
 BATCH AWARE QC
 --------------
@@ -178,6 +198,21 @@ By default:
 </pre>
 
 <pre>
+GLOBAL CO-ASSEMBLY MODE
+----------------------
+In addition to per-sample (SampleID) co-assembly, the pipeline supports
+a single global metagenome assembly using all FASTQs currently present
+in the data/ directory.
+
+In global mode:
+ - All libraries are merged into one co-assembly
+ - A single Flye run is submitted
+ - Temporary merged reads are written to scratch and deleted after completion
+ - Output is written to:
+     results/assembly_metaflye/GLOBAL/
+</pre>
+
+<pre>
 STEP CONTROL
 ------------
 QC / Assembly:
@@ -205,11 +240,15 @@ ASSEMBLY OUTPUTS (MetaFlye)
 --------------------------
 results/assembly_metaflye/
   <SampleID>/
-    reads.coassembly.fastq.gz
-    inputs.fastq.list
     assembly.fasta
     assembly_info.txt
     flye.log
+
+Temporary (auto-deleted) during assembly:
+  /scratch/t.sousa/data_used/metaflye_tmp/<SampleID>/
+    reads.coassembly.fastq.gz
+    inputs.fastq.list
+
 </pre>
 
 <pre>
