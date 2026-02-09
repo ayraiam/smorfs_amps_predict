@@ -20,6 +20,10 @@ ENV_PREFIX="${ENV_PREFIX_DIR}/${ENV_NAME}"
 
 ASSEMBLY_ROOT="${ASSEMBLY_ROOT:-${RESULTS_DIR}/assembly_metaflye}"
 
+# Store the huge merged co-assembly FASTQ on scratch (and delete after Flye)
+SCRATCH_READS_ROOT="${SCRATCH_READS_ROOT:-/scratch/t.sousa/data_used/metaflye_tmp}"
+CLEANUP_COASSEMBLY_READS="${CLEANUP_COASSEMBLY_READS:-1}"
+
 READ_MODE="${READ_MODE:-nano-raw}"  # nano-raw | nano-hq | nano-corr
 MIN_OVERLAP="${MIN_OVERLAP:-}"      # empty => do NOT pass --min-overlap
 GENOME_SIZE="${GENOME_SIZE:-}"      # usually empty for metagenomes
@@ -103,8 +107,9 @@ build_coassembly_reads() {
   local sid="$1"
   local outdir="$2"
 
-  local reads_gz="${outdir}/reads.coassembly.fastq.gz"
-  local manifest="${outdir}/inputs.fastq.list"
+  mkdir -p "${SCRATCH_READS_ROOT}/${sid}"
+  local reads_gz="${SCRATCH_READS_ROOT}/${sid}/reads.coassembly.fastq.gz"
+  local manifest="${SCRATCH_READS_ROOT}/${sid}/inputs.fastq.list"
 
   if [[ -s "${reads_gz}" ]]; then
     log "Co-assembly reads already exist: ${reads_gz}"
@@ -153,7 +158,7 @@ run_flye_sample() {
   fi
 
   build_coassembly_reads "${sid}" "${outdir}"
-  local fq="${outdir}/reads.coassembly.fastq.gz"
+  local fq="${SCRATCH_READS_ROOT}/${sid}/reads.coassembly.fastq.gz"
 
   local -a cmd
   case "${READ_MODE}" in
@@ -176,6 +181,12 @@ run_flye_sample() {
   log "Cmd     : ${cmd[*]}"
 
   "${cmd[@]}"
+  if [[ "${CLEANUP_COASSEMBLY_READS}" -eq 1 ]]; then
+    log "Cleaning up scratch co-assembly reads for ${sid}"
+    rm -f "${SCRATCH_READS_ROOT}/${sid}/reads.coassembly.fastq.gz" \
+          "${SCRATCH_READS_ROOT}/${sid}/inputs.fastq.list" || true
+    rmdir "${SCRATCH_READS_ROOT}/${sid}" 2>/dev/null || true
+	fi
   log "DONE: ${sid}"
 }
 
