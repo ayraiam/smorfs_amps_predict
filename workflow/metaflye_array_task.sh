@@ -28,7 +28,7 @@ READ_MODE="${READ_MODE:-nano-raw}"  # nano-raw | nano-hq | nano-corr
 MIN_OVERLAP="${MIN_OVERLAP:-}"      # empty => do NOT pass --min-overlap
 GENOME_SIZE="${GENOME_SIZE:-}"      # usually empty for metagenomes
 
-log() { echo "[$(date --iso-8601=seconds)] $*"; }
+log() { echo "[$(date --iso-8601=seconds)] $*" >&2; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
