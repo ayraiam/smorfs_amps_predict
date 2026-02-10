@@ -126,21 +126,65 @@ build_coassembly_reads() {
   log "Manifest: ${manifest}"
   log "Output: ${reads_gz}"
 
-  # Concatenate safely:
-  # - if *.gz => pigz -dc
-  # - else => cat
-  # and compress to one gz.
-   tmp="${reads_gz}.tmp.$$"
-   (
-     for f in "${fqs[@]}"; do
-       [[ -f "$f" ]] || die "Missing FASTQ: $f"
-       if [[ "$f" =~ \.gz$ ]]; then
-         pigz -dc "$f"
-       else
-         cat "$f"
-       fi
-     done
-   ) | pigz -p "${THREADS}" -c > "${tmp}"
+  # Helper: return 0 if this FASTQ needs per-file duplicate header fixing
+  needs_dup_fix() {
+    local base
+    base="$(basename "$1")"
+    case "$base" in
+      nanopore_shotgun_RDS26_L02-2500-low_04.fastq.gz| \
+      nanopore_shotgun_RDS26_L02-2500-normal_12.fastq.gz| \
+      nanopore_shotgun_RDS26_L02-4500-low_07.fastq.gz| \
+      nanopore_shotgun_RDS26_L02-4500-normal_15.fastq.gz| \
+      nanopore_shotgun_RDS26_LO2-500-low_03.fastq.gz| \
+      nanopore_shotgun_RDS26_LO2-500-normal_11.fastq.gz)
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  # Rewrite duplicated read IDs (within a single file stream) by appending _dupN on duplicates only.
+  # Preserves everything after the first token on the header line.
+  rewrite_dup_headers_awk='
+    NR%4==1 {
+      line = $0
+      first = $1                         # first token, includes leading "@"
+      id = first
+      sub(/^@/, "", id)                  # strip "@"
+      c[id]++
+      new = id
+      if (c[id] > 1) new = id "_dup" c[id]
+      rest = substr(line, length(first)+1)  # keeps leading space if present, or empty
+      print "@" new rest
+      next
+    }
+    { print }
+  '
+
+  local tmp="${reads_gz}.tmp.$$"
+
+  (
+    for f in "${fqs[@]}"; do
+      [[ -f "$f" ]] || die "Missing FASTQ: $f"
+
+      if needs_dup_fix "$f"; then
+        log "FOUND dup-header file: $(basename "$f") -> rewriting duplicated read IDs with _dupN"
+        if [[ "$f" =~ \.gz$ ]]; then
+          pigz -dc "$f" | awk "${rewrite_dup_headers_awk}"
+        else
+          cat "$f" | awk "${rewrite_dup_headers_awk}"
+        fi
+      else
+        if [[ "$f" =~ \.gz$ ]]; then
+          pigz -dc "$f"
+        else
+          cat "$f"
+        fi
+      fi
+    done
+  ) | pigz -p "${THREADS}" -c > "${tmp}"
 
   mv "${tmp}" "${reads_gz}"
   log "Co-assembly FASTQ created: ${reads_gz}"
