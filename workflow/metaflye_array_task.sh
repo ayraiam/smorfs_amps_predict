@@ -132,14 +132,16 @@ build_coassembly_reads() {
   # and compress to one gz.
   tmp="${reads_gz}.tmp.$$"
   (
-    for f in "${fqs[@]}"; do
-      [[ -f "$f" ]] || die "Missing FASTQ: $f"
-      if [[ "$f" =~ \.gz$ ]]; then
-        pigz -dc "$f"
-      else
-        cat "$f"
-      fi
-    done
+  for f in "${fqs[@]}"; do
+    [[ -f "$f" ]] || die "Missing FASTQ: $f"
+    src="$(basename "$f")"
+
+    if [[ "$f" =~ \.gz$ ]]; then
+      pigz -dc "$f"
+    else
+       cat "$f"
+    fi | awk -v p="${src}" 'NR%4==1{sub(/^@/,"@"p"__");} {print}'
+   done
   ) | pigz -p "${THREADS}" -c > "${tmp}"
 
   mv "${tmp}" "${reads_gz}"
