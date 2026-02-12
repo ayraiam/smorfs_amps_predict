@@ -50,6 +50,9 @@ MIN_CONTIG_BP=500
 MAX_FUNGAL_PEPTIDE_AA=100
 CPUS=8
 
+#table/catalog settings ---
+MAX_SMO_RF_AA="${MAX_SMO_RF_AA:-100}"  # define "smORF" threshold for the table (you already use 100)
+
 # For funannotate DB (optional but strongly recommended)
 # If empty, funannotate may still run but often complains.
 FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR:-}"
@@ -188,6 +191,58 @@ ensure_smorfs_tools() {
   msg "numpy version: $(python -c 'import numpy as np; print(np.__version__)')"
 
   msg "smorf + funannotate are ready."
+}
+
+is_probably_nt_fasta() {
+  # Heuristic: if sequences are mostly A/C/G/T/N, it's NT
+  # We inspect a small sample to keep it fast.
+  local f="$1"
+  [[ -s "$f" ]] || return 1
+  # Grab first ~200 non-header lines, remove gaps, check for non-ACGTN chars.
+  local bad
+  bad="$(awk 'BEGIN{n=0} /^>/{next} {gsub(/[- \t\r]/,""); if(length($0)>0){print; n++} if(n>=200) exit}' "$f" \
+    | tr -d '\n' \
+    | tr 'acgtn' 'ACGTN' \
+    | tr -d 'ACGTN' \
+    | wc -c)"
+  [[ "$bad" -eq 0 ]]
+}
+
+fasta_to_tsv() {
+  # Convert FASTA to 2-col TSV: id \t sequence (single-line sequence)
+  local fasta="$1"
+  awk '
+    BEGIN{RS=">"; ORS=""; FS="\n"}
+    NR>1{
+      id=$1;
+      seq="";
+      for(i=2;i<=NF;i++){ gsub(/[ \t\r]/,"",$i); seq=seq $i }
+      if(id!="" && seq!=""){
+        # keep only first token of header as ID
+        split(id,a," "); print a[1] "\t" seq "\n"
+      }
+    }' "$fasta"
+}
+
+extract_contig_from_prodigal_id() {
+  # Prodigal protein IDs often look like: contig_123_1 or contig00001_45
+  # We strip a trailing _<number> to get contig_id.
+  local fid="$1"
+  echo "$fid" | sed -E 's/_[0-9]+$//'
+}
+
+load_tiara_map_to_awk() {
+  # Prints awk code to load tiara.map.tsv into an array label[contig]=tiara_label
+  cat <<'AWK'
+    BEGIN{
+      FS="\t"; OFS="\t";
+      while((getline < TIARA) > 0){
+        if(NR==1 && $1=="sequence_id") continue
+        label[$1]=$2
+      }
+      close(TIARA)
+    }
+AWK
 }
 
 # ---------------------------
@@ -529,6 +584,168 @@ create_nonredundant_catalog() {
   msg "[${sample_id}] Non-redundant outputs (representatives + clusters) are under: ${outdir}/catalog/nr_catalog*"
 }
 
+finalize_step2_catalog_and_table() {
+  local sample_id="$1"
+  local outdir="$2"
+
+  mkdirp "${outdir}/catalog"
+
+  local peptides_all="${outdir}/catalog/peptides_all.faa"
+  local cds_all="${outdir}/catalog/cds_all.fna"
+  local tiara_map="${outdir}/contigs/classify/tiara.map.tsv"
+  local table="${outdir}/catalog/predicted_smorfs.tsv"
+
+  : > "${peptides_all}"
+  : > "${cds_all}"
+
+  msg "[${sample_id}] Building canonical per-sample catalogs: peptides_all.faa + cds_all.fna"
+
+  # ---- peptides_all.faa (AA) ----
+  # 1) Prodigal proteins (all proteins)
+  if [[ -s "${outdir}/bac/prodigal/bac.proteins.faa" ]]; then
+    cat "${outdir}/bac/prodigal/bac.proteins.faa" >> "${peptides_all}"
+  fi
+
+  # 2) SmORFinder: best-effort AA FASTAs
+  if [[ -d "${outdir}/bac/smorfinder" ]]; then
+    find "${outdir}/bac/smorfinder" -type f \( -iname "*.faa" -o -iname "*.fa" -o -iname "*.fasta" \) \
+      | while read -r f; do
+          [[ -s "$f" ]] || continue
+          # skip contigs fasta if it was copied around
+          case "$(basename "$f")" in
+            *contigs*.fa* ) continue ;;
+          esac
+          if grep -q '^>' "$f" && ! is_probably_nt_fasta "$f"; then
+            cat "$f" >> "${peptides_all}"
+          fi
+        done
+  fi
+
+  # 3) Funannotate proteins (if found earlier, we already made fungi_le_100aa.faa)
+  # Here we prefer the full predicted proteins if you found them, otherwise use the <=100aa file.
+  local fun_prot_full
+  fun_prot_full="$(find "${outdir}/fungi/funannotate_out" -maxdepth 5 -type f \
+    \( -iname "*proteins*.fa" -o -iname "*proteins*.faa" -o -iname "*protein*.fa" -o -iname "*protein*.faa" \) \
+    | head -n 1 || true)"
+  if [[ -n "${fun_prot_full}" && -s "${fun_prot_full}" ]]; then
+    cat "${fun_prot_full}" >> "${peptides_all}"
+  elif [[ -s "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" ]]; then
+    cat "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" >> "${peptides_all}"
+  fi
+
+  # ---- cds_all.fna (NT) ----
+  # 1) Prodigal CDS (bacteria) is reliable
+  if [[ -s "${outdir}/bac/prodigal/bac.cds.fna" ]]; then
+    cat "${outdir}/bac/prodigal/bac.cds.fna" >> "${cds_all}"
+  fi
+
+  # 2) SmORFinder: best-effort NT FASTAs
+  if [[ -d "${outdir}/bac/smorfinder" ]]; then
+    find "${outdir}/bac/smorfinder" -type f \( -iname "*.fna" -o -iname "*.fa" -o -iname "*.fasta" \) \
+      | while read -r f; do
+          [[ -s "$f" ]] || continue
+          if grep -q '^>' "$f" && is_probably_nt_fasta "$f"; then
+            cat "$f" >> "${cds_all}"
+          fi
+        done
+  fi
+
+  # 3) Funannotate CDS NT: best-effort find under output (varies by version)
+  local fun_cds
+  fun_cds="$(find "${outdir}/fungi/funannotate_out" -maxdepth 6 -type f \
+    \( -iname "*cds*.fa" -o -iname "*cds*.fna" -o -iname "*transcripts*.fa" -o -iname "*transcripts*.fna" \) \
+    | head -n 1 || true)"
+  if [[ -n "${fun_cds}" && -s "${fun_cds}" && is_probably_nt_fasta "${fun_cds}" ]]; then
+    cat "${fun_cds}" >> "${cds_all}"
+  fi
+
+  # If either is empty, keep the file but note it in logs
+  [[ -s "${peptides_all}" ]] || msg "[${sample_id}] NOTE: peptides_all.faa is empty."
+  [[ -s "${cds_all}" ]] || msg "[${sample_id}] NOTE: cds_all.fna is empty (common if only peptides were harvested)."
+
+  # ---- Build predicted_smorfs.tsv ----
+  # We will build a “long table” keyed by feature_id, with both AA and NT when present.
+  # We'll include tiara label (when contig_id is known).
+
+  msg "[${sample_id}] Building per-sample TSV: ${table}"
+
+  # Header (stable schema you can keep populating)
+  printf "sample_id\tsource\tfeature_id\tcontig_id\ttiara_label\taa_len\taa_seq\tnt_len\tnt_seq\tis_smorF_candidate\tamp_pred\tamp_score\themolytic\ttoxic\tnotes\n" \
+    > "${table}"
+
+    # Load AA/NT sequences into temp files
+    local tmp_aa tmp_nt
+    tmp_aa="$(mktemp)"
+    tmp_nt="$(mktemp)"
+    trap 'rm -f "${tmp_aa}" "${tmp_nt}"' RETURN
+
+  # AA: dump all AA in peptides_all
+  if [[ -s "${peptides_all}" ]]; then
+    fasta_to_tsv "${peptides_all}" > "${tmp_aa}"
+  else
+    : > "${tmp_aa}"
+  fi
+
+  # NT: dump all NT in cds_all
+  if [[ -s "${cds_all}" ]]; then
+    fasta_to_tsv "${cds_all}" > "${tmp_nt}"
+  else
+    : > "${tmp_nt}"
+  fi
+
+  # Decide source for each feature:
+  # We infer source from ID prefixes when possible, otherwise "mixed".
+  # Prodigal IDs often include contig + _<num>.
+  # Funannotate IDs usually look like gene models.
+  # SmORFinder varies.
+  #
+  # We'll:
+  # - emit rows for every AA feature in peptides_all
+  # - attach NT if same feature_id exists in cds_all
+  # - attach contig_id (best-effort) + tiara label (if contig known)
+  awk -v S="${sample_id}" -v TIARA="${tiara_map}" '
+    '"$(load_tiara_map_to_awk)"'
+    BEGIN{
+      # load NT sequences keyed by feature_id
+      while((getline < NT) > 0){
+        fid=$1; ntseq=$2;
+        nt[fid]=ntseq;
+      }
+      close(NT)
+    }
+    {
+      fid=$1; aaseq=$2;
+      aa_len=length(aaseq);
+      is_smorF=(aa_len<=MAXAA ? "TRUE" : "FALSE");
+
+      # infer contig_id for prodigal-like IDs
+      contig=fid;
+      # strip trailing _<num> (prodigal typical)
+      sub(/_[0-9]+$/, "", contig);
+
+      # tiara label if available
+      tl = (contig in label ? label[contig] : "");
+
+      # infer source
+      src="mixed";
+      if (fid ~ /_[0-9]+$/) src="prodigal";
+      if (fid ~ /^smorf/i) src="smorfinder";
+      if (fid ~ /FUN_/ || fid ~ /_T[0-9]+$/) src="funannotate";
+
+      ntseq = (fid in nt ? nt[fid] : "");
+      nt_len = (ntseq=="" ? 0 : length(ntseq));
+
+      # AMP placeholders (fill later or with tighter macrel parsing)
+      amp_pred=""; amp_score=""; hemol=""; toxic=""; notes="";
+
+      print S,src,fid,contig,tl,aa_len,aaseq,nt_len,ntseq,is_smorF,amp_pred,amp_score,hemol,toxic,notes;
+    }
+  ' MAXAA="${MAX_SMO_RF_AA}" NT="${tmp_nt}" "${tmp_aa}" \
+    >> "${table}"
+
+  msg "[${sample_id}] TSV written: ${table}"
+}
+
 # ---------------------------
 # Main per-sample runner
 # ---------------------------
@@ -546,6 +763,7 @@ run_one_sample() {
   run_smorfinder_bac            "${sample_id}" "${outdir}/contigs/bac_contigs.fasta"   "${outdir}"
   run_funannotate_fungi         "${sample_id}" "${outdir}/contigs/fungi_contigs.fasta" "${outdir}"
   create_nonredundant_catalog   "${sample_id}" "${outdir}"
+  finalize_step2_catalog_and_table "${sample_id}" "${outdir}"
 
   msg "[${sample_id}] DONE"
 }
