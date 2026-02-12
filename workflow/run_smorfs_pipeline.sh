@@ -232,16 +232,18 @@ extract_contig_from_prodigal_id() {
 }
 
 load_tiara_map_to_awk() {
-  # Prints awk code to load tiara.map.tsv into an array label[contig]=tiara_label
   cat <<'AWK'
-    BEGIN{
-      FS="\t"; OFS="\t";
-      while((getline < TIARA) > 0){
-        if(NR==1 && $1=="sequence_id") continue
-        label[$1]=$2
-      }
-      close(TIARA)
+BEGIN{
+  FS="\t"; OFS="\t";
+  if (TIARA != "") {
+    while ((getline line < TIARA) > 0) {
+      if (line ~ /^[[:space:]]*$/) continue;
+      split(line, f, "\t");
+      if (f[1] != "" && f[2] != "") label[f[1]] = f[2];
     }
+    close(TIARA);
+  }
+}
 AWK
 }
 
@@ -594,6 +596,11 @@ finalize_step2_catalog_and_table() {
   local cds_all="${outdir}/catalog/cds_all.fna"
   local tiara_map="${outdir}/contigs/classify/tiara.map.tsv"
   local table="${outdir}/catalog/predicted_smorfs.tsv"
+
+  if [[ ! -s "${tiara_map}" ]]; then
+    msg "[${sample_id}] NOTE: Tiara map missing/empty at: ${tiara_map} (tiara_label will be blank)"
+    tiara_map=""
+  fi
 
   : > "${peptides_all}"
   : > "${cds_all}"
