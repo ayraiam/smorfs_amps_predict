@@ -655,8 +655,13 @@ finalize_step2_catalog_and_table() {
   fun_cds="$(find "${outdir}/fungi/funannotate_out" -maxdepth 6 -type f \
     \( -iname "*cds*.fa" -o -iname "*cds*.fna" -o -iname "*transcripts*.fa" -o -iname "*transcripts*.fna" \) \
     | head -n 1 || true)"
-  if [[ -n "${fun_cds}" && -s "${fun_cds}" && is_probably_nt_fasta "${fun_cds}" ]]; then
-    cat "${fun_cds}" >> "${cds_all}"
+
+  if [[ -n "${fun_cds}" && -s "${fun_cds}" ]]; then
+    if is_probably_nt_fasta "${fun_cds}"; then
+      cat "${fun_cds}" >> "${cds_all}"
+    else
+      msg "[${sample_id}] NOTE: funannotate candidate NT file is not NT-like, skipping: ${fun_cds}"
+    fi
   fi
 
   # If either is empty, keep the file but note it in logs
