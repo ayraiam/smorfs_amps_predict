@@ -715,30 +715,34 @@ finalize_step2_catalog_and_table() {
   # - emit rows for every AA feature in peptides_all
   # - attach NT if same feature_id exists in cds_all
   # - attach contig_id (best-effort) + tiara label (if contig known)
-  awk -v S="${sample_id}" -v TIARA="${tiara_map}" '
+  awk \
+    -v S="${sample_id}" \
+    -v TIARA="${tiara_map}" \
+    -v NTFILE="${tmp_nt}" \
+    -v MAXAA="${MAX_SMO_RF_AA}" '
     '"$(load_tiara_map_to_awk)"'
     BEGIN{
       # load NT sequences keyed by feature_id
-      while((getline < NT) > 0){
-        fid=$1; ntseq=$2;
-        nt[fid]=ntseq;
+      if (NTFILE != "") {
+        while ((getline line < NTFILE) > 0) {
+          if (line ~ /^[[:space:]]*$/) continue;
+          split(line, f, "\t");
+          fid=f[1]; ntseq=f[2];
+          if (fid != "") nt[fid]=ntseq;
+        }
+        close(NTFILE);
       }
-      close(NT)
     }
     {
       fid=$1; aaseq=$2;
       aa_len=length(aaseq);
       is_smorF=(aa_len<=MAXAA ? "TRUE" : "FALSE");
 
-      # infer contig_id for prodigal-like IDs
       contig=fid;
-      # strip trailing _<num> (prodigal typical)
       sub(/_[0-9]+$/, "", contig);
 
-      # tiara label if available
       tl = (contig in label ? label[contig] : "");
 
-      # infer source
       src="mixed";
       if (fid ~ /_[0-9]+$/) src="prodigal";
       if (fid ~ /^smorf/i) src="smorfinder";
@@ -747,13 +751,11 @@ finalize_step2_catalog_and_table() {
       ntseq = (fid in nt ? nt[fid] : "");
       nt_len = (ntseq=="" ? 0 : length(ntseq));
 
-      # AMP placeholders (fill later or with tighter macrel parsing)
       amp_pred=""; amp_score=""; hemol=""; toxic=""; notes="";
 
       print S,src,fid,contig,tl,aa_len,aaseq,nt_len,ntseq,is_smorF,amp_pred,amp_score,hemol,toxic,notes;
     }
-  ' MAXAA="${MAX_SMO_RF_AA}" NT="${tmp_nt}" "${tmp_aa}" \
-    >> "${table}"
+  ' "${tmp_aa}" >> "${table}"
 
   msg "[${sample_id}] TSV written: ${table}"
 }
