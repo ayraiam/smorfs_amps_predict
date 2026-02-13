@@ -50,6 +50,11 @@ RUN_PARSE=1
 RUN_PLOTS=1
 RUN_AMPS=0
 RUN_MAP=0
+RUN_MACREL_ATTACH=0
+
+# Macrel-only attach to predicted_smorfs.tsv (optional)
+PREDICTED_SMORFS_TSV=""
+MACREL_ATTACH_OUT=""
 
 # ---------------------------
 # Helpers
@@ -198,6 +203,82 @@ step_c_amps() {
 
 }
 
+step_c_macrel_attach_predicted_smorfs() {
+  [[ -n "${PREDICTED_SMORFS_TSV}" ]] || die "--predicted-smorfs not provided"
+  [[ -f "${PREDICTED_SMORFS_TSV}" ]] || die "Missing: ${PREDICTED_SMORFS_TSV}"
+
+  local outdir
+  outdir="$(dirname "${PREDICTED_SMORFS_TSV}")"
+
+  local peptides_faa="${outdir}/predicted_smorfs.peptides_for_macrel.faa"
+  local macrel_tsv="${outdir}/macrel_predictions.normalized.tsv"
+  local merged_tsv
+
+  if [[ -n "${MACREL_ATTACH_OUT}" ]]; then
+    merged_tsv="${MACREL_ATTACH_OUT}"
+  else
+    merged_tsv="${outdir}/predicted_smorfs.with_macrel.tsv"
+  fi
+
+  msg "Building peptide FASTA for Macrel from: ${PREDICTED_SMORFS_TSV}"
+  python - <<'PY'
+import sys
+import pandas as pd
+from pathlib import Path
+
+tsv = Path(sys.argv[1])
+faa = Path(sys.argv[2])
+
+df = pd.read_csv(tsv, sep="\t", dtype=str)
+
+def pick(cols, cands):
+    lower = {c.lower(): c for c in cols}
+    for x in cands:
+        if x.lower() in lower:
+            return lower[x.lower()]
+    return None
+
+id_col = pick(df.columns.tolist(), ["peptide_id","smorf_id","orf_id","id","accession","name","seqid"])
+seq_col = pick(df.columns.tolist(), ["peptide_seq","aa_seq","aa","sequence","pep_seq","peptide"])
+if not id_col or not seq_col:
+    raise SystemExit(f"ERROR: Could not detect id/seq columns. Columns={df.columns.tolist()}")
+
+df[id_col] = df[id_col].astype(str).str.strip()
+df[seq_col] = df[seq_col].astype(str).str.strip()
+
+if df[id_col].duplicated().any():
+    dups = df.loc[df[id_col].duplicated(), id_col].head(10).tolist()
+    raise SystemExit(f"ERROR: duplicated IDs in {id_col}. Examples: {dups}")
+
+with faa.open("w") as out:
+    for pid, seq in zip(df[id_col], df[seq_col]):
+        if not pid or pid == "nan":
+            continue
+        if not seq or seq == "nan":
+            continue
+        out.write(f">{pid}\n{seq}\n")
+
+print(f"Wrote FASTA: {faa}", file=sys.stderr)
+PY \
+  "${PREDICTED_SMORFS_TSV}" \
+  "${peptides_faa}"
+
+  msg "Running Macrel via workflow/predict_amps.py"
+  python workflow/predict_amps.py "${peptides_faa}" \
+    --out "${macrel_tsv}" \
+    --threads "${CPUS:-8}"
+
+  msg "Attaching Macrel predictions back to predicted_smorfs.tsv"
+  python workflow/attach_macrel_to_predicted_smorfs.py \
+    --predicted "${PREDICTED_SMORFS_TSV}" \
+    --macrel "${macrel_tsv}" \
+    --out "${merged_tsv}" \
+    --id-col feature_id \
+    --seq-col aa_seq
+
+  msg "Wrote merged file: ${merged_tsv}"
+}
+
 # ---------------------------
 # Step D: Global NR contigs + mapping per replicate
 # ---------------------------
@@ -324,6 +405,12 @@ Options:
   --sample-col STR       SampleID column name in metadata map (default: SampleID)
   --fastq-col STR        FASTQ filename column name (default: FASTQ_Filename)
 
+  --macrel-attach-only       Run ONLY: Macrel on predicted_smorfs.tsv and attach results (no parse/plots/NR/mapping)
+  --predicted-smorfs PATH    Input predicted smORFs TSV (e.g. results/smorfs/SAMPLE/catalog/predicted_smorfs.tsv)
+  --id-col STR               Column in predicted TSV to use as peptide ID (recommended: feature_id)
+  --seq-col STR              Column in predicted TSV with AA sequence (e.g. peptide_seq / aa_seq / sequence)
+  --macrel-attach-out PATH   Output merged TSV (default: alongside predicted TSV as predicted_smorfs.with_macrel.tsv)
+
   -h, --help             Show help
 
 Notes:
@@ -355,6 +442,11 @@ while [[ $# -gt 0 ]]; do
     --run-amps) RUN_AMPS=1; shift ;;
     --run-map) RUN_MAP=1; shift ;;
 
+    --predicted-smorfs) PREDICTED_SMORFS_TSV="$2"; shift 2 ;;
+    --macrel-out) MACREL_ATTACH_OUT="$2"; shift 2 ;;
+
+    --macrel-attach-only) RUN_PARSE=0; RUN_PLOTS=0; RUN_AMPS=0; RUN_MAP=0; RUN_MACREL_ATTACH=1; shift ;;
+
     -h|--help) usage; exit 0 ;;
     *) die "Unknown argument: $1 (use --help)" ;;
   esac
@@ -368,10 +460,12 @@ ensure_env_once
 [[ -f workflow/summarize_flye_logs.py ]] || die "Missing: workflow/summarize_flye_logs.py"
 [[ -f workflow/plot_metaflye_metrics.R ]] || die "Missing: workflow/plot_metaflye_metrics.R"
 [[ -f workflow/predict_amps.py ]] || die "Missing: workflow/predict_amps.py"
+[[ -f workflow/attach_macrel_to_predicted_smorfs.py ]] || die "Missing: workflow/attach_macrel_to_predicted_smorfs.py"
 
 if [[ "${RUN_PARSE}" -eq 1 ]]; then step_a_parse; fi
 if [[ "${RUN_PLOTS}" -eq 1 ]]; then step_b_plots_r; fi
 if [[ "${RUN_AMPS}" -eq 1 ]]; then step_c_amps; fi
+if [[ "${RUN_MACREL_ATTACH}" -eq 1 ]]; then step_c_macrel_attach_predicted_smorfs; fi
 if [[ "${RUN_MAP}" -eq 1 ]]; then step_d_map; fi
 
 msg "DONE"
