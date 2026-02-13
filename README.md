@@ -17,8 +17,7 @@
 ABOUT
 -----
 smorfs_amps_predict is a lightweight, reproducible pipeline for
-Oxford Nanopore shotgun metagenomic data, providing a robust backbone
-for downstream smORF and antimicrobial peptide (AMP) discovery.
+Oxford Nanopore shotgun metagenomic data, providing a modular, HPC-native framework for reproducible smORF and antimicrobial peptide (AMP) discovery.
 
 The pipeline combines:
   1) Read-level quality control and diagnostics (safe, read-only by default)
@@ -89,7 +88,8 @@ DESIGN PRINCIPLES
  - AMP prediction supports:
      • Global non-redundant peptide catalogs (mmseqs clustered)
      • Direct annotation of per-sample predicted_smorfs.tsv files
- - ID-safe merging ensures Macrel predictions match exact peptide sequences
+ - Deterministic ID-safe merging ensures Macrel predictions match exact peptide sequences
+ - Sequence mismatches trigger hard failure (no silent corruption)
  - Reproducible Conda environments (created if missing)
  - HPC-native design (Slurm + srun / sbatch)
  - Transparent logging, resumability, and provenance
@@ -126,14 +126,38 @@ In global mode:
      results/assembly_metaflye/<GLOBAL_ID>/
 </pre>
 
-<pre> 
-MACREL AMP MODES 
----------------- 
-The pipeline supports two AMP prediction strategies using Macrel: 
-  1) Global NR peptide catalog mode - Concatenates per-sample peptide catalogs - Clusters with mmseqs (protein-level) - Runs Macrel on non-redundant representatives - Output: results/catalog_global/global_nr_peptides.faa results/catalog_global/amp_predictions.tsv 
-  2) Direct per-sample annotation mode - Takes: results/smorfs/<SampleID>/catalog/predicted_smorfs.tsv - Builds FASTA using a stable ID column (recommended: feature_id) - Runs Macrel - Safely merges predictions back into the original TSV - Verifies sequence consistency before merging - Output: predicted_smorfs.with_macrel.tsv This mode replaces placeholder columns: amp_pred, amp_score, hemolytic, toxic, notes With Macrel-derived fields: amp_pred, amp_prob, hemo_pred, hemo_prob, macrel_class </pre>
+<pre>
+MACREL AMP MODES
+----------------
+The pipeline supports two AMP prediction strategies using Macrel:
+
+1) Global NR peptide catalog mode
+   - Concatenates per-sample peptide catalogs
+   - Clusters with mmseqs (protein-level)
+   - Runs Macrel on non-redundant representatives
+   - Outputs:
+       results/catalog_global/global_nr_peptides.faa
+       results/catalog_global/amp_predictions.tsv
+
+2) Direct per-sample annotation mode
+   - Input:
+       results/smorfs/<SampleID>/catalog/predicted_smorfs.tsv
+   - Builds FASTA using a stable ID column (recommended: feature_id)
+   - Runs Macrel
+   - Safely merges predictions back into the original TSV
+   - Validates sequence consistency before merging
+   - Output:
+       predicted_smorfs.with_macrel.tsv
+
+Direct annotation mode replaces placeholder columns:
+  amp_pred, amp_score, hemolytic, toxic, notes
+
+With Macrel-derived fields:
+  amp_pred, amp_prob, hemo_pred, hemo_prob, macrel_class
 </pre>
-  
+
+
+<pre>
 STEP CONTROL
 ------------
 QC / Assembly:
@@ -199,15 +223,13 @@ bash workflow/runall.sh --metaflye-only --global --global-id UNIFORME_GLOBAL
 
 # smORFs on one assembly
 bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500
-</pre>
 
-# Annotate predicted_smorfs.tsv with Macrel (ID-safe merge)
-bash workflow/downstream_analysis.sh \
+# Annotate predicted_smorfs.tsv with Macrel (via Slurm launcher)
+bash workflow/runall.sh \
   --macrel-attach-only \
   --predicted-smorfs results/smorfs/CAMPINA_GLOBAL/catalog/predicted_smorfs.tsv \
   --id-col feature_id \
-  --seq-col peptide_seq
-
+  --seq-col aa_seq
 
 </pre>
 CITATION
