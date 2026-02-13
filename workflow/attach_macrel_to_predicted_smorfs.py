@@ -86,8 +86,8 @@ def main() -> None:
     # Sequence validation for matched rows
     matched = merged["peptide_id"].notna()
     if matched.any():
-        seq_pred = merged.loc[matched, seq_col].astype(str)
-        seq_mac = merged.loc[matched, "peptide_seq"].astype(str)
+        seq_pred = merged.loc[matched, seq_col].astype(str).str.strip().str.rstrip("*")
+        seq_mac  = merged.loc[matched, "peptide_seq"].astype(str).str.strip().str.rstrip("*")
         mism = (seq_pred != seq_mac)
         if mism.any() and args.require_seq_match:
             bad = merged.loc[matched].loc[mism, [id_col, seq_col, "peptide_seq"]].head(10)
