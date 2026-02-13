@@ -39,6 +39,7 @@ ENV_PREFIX="${ENV_PREFIX_DIR}/${ENV_NAME}"
 # IMPORTANT:
 # RESULTS_DIR passed from runall.sh is the BASE results folder (default: "results")
 BASE_RESULTS_DIR="${RESULTS_DIR:-results}"
+PROJECT_ROOT="$(pwd)"
 
 # Where smORFs outputs go:
 RESULTS_DIR="${BASE_RESULTS_DIR}/smorfs"
@@ -253,7 +254,7 @@ AWK
 ensure_smorf_tf_env() {
   init_conda
 
-  local TF_ENV_PREFIX="${ENV_PREFIX_DIR}/smorf_tf_env"
+  local TF_ENV_PREFIX="${PROJECT_ROOT}/${ENV_PREFIX_DIR}/smorf_tf_env"
   local lockdir="${TF_ENV_PREFIX}.lockdir"
 
   if [[ -d "${TF_ENV_PREFIX}" ]]; then
@@ -467,16 +468,13 @@ run_smorfinder_bac() {
     return 0
   }
 
-  local TF_ENV_PREFIX="${ENV_PREFIX_DIR}/smorf_tf_env"
+  local TF_ENV_PREFIX="${PROJECT_ROOT}/${ENV_PREFIX_DIR}/smorf_tf_env"
 
-  msg "[${sample_id}] Running SmORFinder (TF env)"
-  (
-    cd "${outdir}/bac/smorfinder" &&
-    conda run -p "${TF_ENV_PREFIX}" \
-      smorf meta "../../contigs/bac_contigs.fasta" --threads "${CPUS}"
-  ) \
+  conda run -p "${TF_ENV_PREFIX}" \
+    smorf meta "${outdir}/contigs/bac_contigs.fasta" --threads "${CPUS}" \
     > "${outdir}/bac/smorfinder/smorfinder.stdout.log" \
     2> "${outdir}/bac/smorfinder/smorfinder.stderr.log" || true
+
 }
 
 # ---------------------------
@@ -499,6 +497,13 @@ run_funannotate_fungi() {
     msg "[${sample_id}] Using FUNANNOTATE_DB_DIR=${FUNANNOTATE_DB_DIR}"
     export FUNANNOTATE_DB="${FUNANNOTATE_DB_DIR}"
   fi
+
+  if [[ -z "${FUNANNOTATE_DB:-}" ]]; then
+    msg "[${sample_id}] WARNING: FUNANNOTATE_DB is not set; funannotate predict may fail."
+  else
+    msg "[${sample_id}] FUNANNOTATE_DB=${FUNANNOTATE_DB}"
+  fi
+
 
   # Minimal example: funannotate predict -i genome.fasta -o out --species "Name" --cpus N :contentReference[oaicite:13]{index=13}
   funannotate predict \
@@ -685,6 +690,14 @@ finalize_step2_catalog_and_table() {
   printf "sample_id\tsource\tfeature_id\tcontig_id\ttiara_label\taa_len\taa_seq\tnt_len\tnt_seq\tis_smorF_candidate\tamp_pred\tamp_score\themolytic\ttoxic\tnotes\n" \
     > "${table}"
 
+    # Temp files (always define them first; set -u safe)
+    local tmp_aa="" tmp_nt=""
+
+    tmp_aa="$(mktemp)"
+    tmp_nt="$(mktemp)"
+
+    # Cleanup on function return (safe even if empty)
+    trap '[[ -n "${tmp_aa:-}" ]] && rm -f "${tmp_aa}"; [[ -n "${tmp_nt:-}" ]] && rm -f "${tmp_nt}"' RETURN
     # Load AA/NT sequences into temp files
     local tmp_aa tmp_nt
     tmp_aa="$(mktemp)"
