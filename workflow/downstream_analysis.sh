@@ -254,6 +254,7 @@ with faa.open("w") as out:
             continue
         if not seq or seq.lower() == "nan":
             continue
+        seq = str(seq).strip().replace("\r", "").rstrip("*")
         out.write(f">{pid}\n{seq}\n")
 
 print(f"Wrote FASTA: {faa}", file=sys.stderr)
