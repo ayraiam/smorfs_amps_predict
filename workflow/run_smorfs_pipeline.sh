@@ -145,6 +145,153 @@ ensure_env_once() {
   set -u
 
   msg "Python: $(python -V)"
+  msg "Numpy:  $(python -c 'import numpy as np; print(np.__version__)')"#!/usr/bin/env bash
+# ==========================================================
+# Script: workflow/run_smorfs_pipeline.sh
+# Purpose:
+#   - Create env with tools for bacterial + fungal smORF discovery
+#   - For each MetaFlye assembly.fasta:
+#       A) Flag contigs <500 bp as low-confidence (DO NOT remove)
+#       B) Track per-site assembly stats in single TSV (append-safe)
+#       C) Classify contigs (Tiara) -> branch bac vs fungal
+#       D) Prodigal meta-mode ORFs for bac contigs
+#       E) SmORFinder for bac contigs
+#       F) Funannotate for fungal contigs + flag <=100 aa peptides
+#       G) Pool peptides and de-replicate (MMseqs2 easy-cluster)
+#
+# Inputs:
+#   results/assembly_metaflye/<sample_name>/assembly.fasta
+#
+# Outputs (per sample):
+#   results/smorfs/<sample_name>/
+#     contigs/ (split + classified)
+#     bac/ (prodigal + smorfinder)
+#     fungi/ (funannotate)
+#     catalog/ (pooled + nonredundant clusters)
+#
+# Global outputs:
+#   results/smorfs/assembly_stats.tsv         (one row per sample)
+#   results/smorfs/contig_stats.tsv           (one row per contig)
+# ==========================================================
+set -euo pipefail
+
+# ---------------------------
+# Defaults
+# ---------------------------
+# Env naming/prefix (HPC-safe, like MetaFlye)
+ENV_NAME="${SMORFS_ENV:-smorfs_amps_env}"
+ENV_PREFIX_DIR="${ENV_PREFIX_DIR:-envs}"
+ENV_PREFIX="${ENV_PREFIX_DIR}/${ENV_NAME}"
+
+# IMPORTANT:
+# RESULTS_DIR passed from runall.sh is the BASE results folder (default: "results")
+BASE_RESULTS_DIR="${RESULTS_DIR:-results}"
+PROJECT_ROOT="$(pwd)"
+
+# Where smORFs outputs go:
+RESULTS_DIR="${BASE_RESULTS_DIR}/smorfs"
+
+# Where MetaFlye assemblies are:
+ASSEMBLY_ROOT="${BASE_RESULTS_DIR}/assembly_metaflye"
+
+MIN_CONTIG_BP=500
+MAX_FUNGAL_PEPTIDE_AA=100
+CPUS=8
+
+#table/catalog settings ---
+MAX_SMO_RF_AA="${MAX_SMO_RF_AA:-100}"  # define "smORF" threshold for the table (you already use 100)
+
+# For funannotate DB (optional but strongly recommended)
+# If empty, funannotate may still run but often complains.
+FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR:-}"
+
+# ---------------------------
+# Helpers
+# ---------------------------
+die() { echo "ERROR: $*" >&2; exit 1; }
+msg() { echo "[`date +'%F %T'`] $*" >&2; }
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Missing required command in PATH: $1"
+}
+
+mkdirp() { mkdir -p "$1"; }
+
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+init_conda() {
+  if have_cmd conda; then
+    # shellcheck disable=SC1090
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    return 0
+  fi
+  for guess in "$HOME/miniforge3" "$HOME/miniconda3" "/opt/conda"; do
+    if [[ -f "${guess}/etc/profile.d/conda.sh" ]]; then
+      # shellcheck disable=SC1090
+      source "${guess}/etc/profile.d/conda.sh"
+      return 0
+    fi
+  done
+  die "conda not found. Load conda module or add conda to PATH."
+}
+
+ensure_env_once() {
+  init_conda
+  mkdir -p "${ENV_PREFIX_DIR}"
+
+  local lockdir="${ENV_PREFIX}.lockdir"
+
+  if [[ -d "${ENV_PREFIX}" ]]; then
+    msg "Env exists: ${ENV_PREFIX}"
+  else
+    # Acquire lock
+    while ! mkdir "${lockdir}" 2>/dev/null; do
+      msg "Waiting for env lock..."
+      sleep 5
+    done
+
+    # ALWAYS release lock on exit from this function (success or failure)
+    cleanup_lock() { rmdir "${lockdir}" 2>/dev/null || true; }
+    trap cleanup_lock EXIT INT TERM
+
+    # Another process may have created it while we waited
+    if [[ -d "${ENV_PREFIX}" ]]; then
+      msg "Env appeared while waiting. Continuing."
+      return 0
+    fi
+
+    msg "Creating conda env at: ${ENV_PREFIX}"
+    local installer="conda"
+    if have_cmd mamba; then installer="mamba"; fi
+
+    "${installer}" config set channel_priority strict >/dev/null 2>&1 || true
+
+    "${installer}" create -y -p "${ENV_PREFIX}" --override-channels \
+      -c conda-forge -c bioconda \
+      python=3.8 \
+      tiara=1.0.3 \
+      funannotate \
+      prodigal \
+      mmseqs2 \
+      seqkit \
+      csvtk \
+      pigz
+
+
+    msg "Env created: ${ENV_PREFIX}"
+
+    # IMPORTANT: remove the trap after successful creation so it doesn't
+    # run later when you activate conda etc. (optional but cleaner)
+    trap - EXIT INT TERM
+    cleanup_lock
+  fi
+
+  # activation below stays the same...
+  set +u
+  conda activate "${ENV_PREFIX}"
+  set -u
+
+  msg "Python: $(python -V)"
   msg "Numpy:  $(python -c 'import numpy as np; print(np.__version__)')"
   msg "Checking tiara import..."
   python -c "import tiara; print('tiara import OK')"
@@ -504,10 +651,16 @@ run_funannotate_fungi() {
     msg "[${sample_id}] FUNANNOTATE_DB=${FUNANNOTATE_DB}"
   fi
 
+  mkdir -p "${outdir}/fungi/mask"
+  funannotate mask \
+    -i "${fungi_fa}" \
+    -o "${outdir}/fungi/mask/fungi_contigs.masked.fasta" \
+    > "${outdir}/fungi/mask/funannotate.mask.stdout.log" \
+    2> "${outdir}/fungi/mask/funannotate.mask.stderr.log" || true
 
   # Minimal example: funannotate predict -i genome.fasta -o out --species "Name" --cpus N :contentReference[oaicite:13]{index=13}
   funannotate predict \
-    -i "${fungi_fa}" \
+    -i "${outdir}/fungi/mask/fungi_contigs.masked.fasta" \
     -o "${outdir}/fungi/funannotate_out" \
     --species "Fungus_sp_${sample_id}" \
     --cpus "${CPUS}" \
