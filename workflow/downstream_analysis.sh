@@ -52,8 +52,11 @@ RUN_AMPS=0
 RUN_MAP=0
 RUN_MACREL_ATTACH=0
 
-# Macrel-only attach to predicted_smorfs.tsv (optional)
+# Macrel attach (per-sample predicted_smorfs.tsv)
+RUN_MACREL_ATTACH=0
 PREDICTED_SMORFS_TSV=""
+MACREL_ID_COL="feature_id"
+MACREL_SEQ_COL=""
 MACREL_ATTACH_OUT=""
 
 # ---------------------------
@@ -398,11 +401,11 @@ Options:
   --sample-col STR       SampleID column name in metadata map (default: SampleID)
   --fastq-col STR        FASTQ filename column name (default: FASTQ_Filename)
 
-  --macrel-attach-only       Run ONLY: Macrel on predicted_smorfs.tsv and attach results (no parse/plots/NR/mapping)
-  --predicted-smorfs PATH    Input predicted smORFs TSV (e.g. results/smorfs/SAMPLE/catalog/predicted_smorfs.tsv)
-  --id-col STR               Column in predicted TSV to use as peptide ID (recommended: feature_id)
-  --seq-col STR              Column in predicted TSV with AA sequence (e.g. peptide_seq / aa_seq / sequence)
-  --macrel-attach-out PATH   Output merged TSV (default: alongside predicted TSV as predicted_smorfs.with_macrel.tsv)
+  --macrel-attach-only       Run ONLY: Macrel on predicted_smorfs.tsv and attach results
+  --predicted-smorfs PATH    Input predicted smORFs TSV
+  --id-col STR               ID column in predicted TSV (recommended: feature_id)
+  --seq-col STR              AA sequence column in predicted TSV (e.g. aa_seq)
+  --macrel-attach-out PATH   Output merged TSV (default: predicted_smorfs.with_macrel.tsv)
 
   -h, --help             Show help
 
@@ -438,12 +441,28 @@ while [[ $# -gt 0 ]]; do
     --predicted-smorfs) PREDICTED_SMORFS_TSV="$2"; shift 2 ;;
     --macrel-out) MACREL_ATTACH_OUT="$2"; shift 2 ;;
 
-    --macrel-attach-only) RUN_PARSE=0; RUN_PLOTS=0; RUN_AMPS=0; RUN_MAP=0; RUN_MACREL_ATTACH=1; shift ;;
+    --macrel-attach-only)
+    RUN_PARSE=0
+    RUN_PLOTS=0
+    RUN_AMPS=0
+    RUN_MAP=0
+    RUN_MACREL_ATTACH=1
+    shift
+    ;;
+    --predicted-smorfs) PREDICTED_SMORFS_TSV="$2"; shift 2 ;;
+    --id-col) MACREL_ID_COL="$2"; shift 2 ;;
+    --seq-col) MACREL_SEQ_COL="$2"; shift 2 ;;
+    --macrel-attach-out) MACREL_ATTACH_OUT="$2"; shift 2 ;;
 
     -h|--help) usage; exit 0 ;;
     *) die "Unknown argument: $1 (use --help)" ;;
   esac
 done
+
+if [[ "${RUN_MACREL_ATTACH}" -eq 1 ]]; then
+  [[ -n "${PREDICTED_SMORFS_TSV}" ]] || die "--predicted-smorfs is required with --macrel-attach-only"
+  [[ -n "${MACREL_SEQ_COL}" ]] || die "--seq-col is required with --macrel-attach-only"
+fi
 
 # ---------------------------
 # Main
