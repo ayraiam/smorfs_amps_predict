@@ -515,10 +515,12 @@ run_funannotate_fungi() {
 
   # Minimal example: funannotate predict -i genome.fasta -o out --species "Name" --cpus N :contentReference[oaicite:13]{index=13}
   funannotate predict \
-    -i "${outdir}/fungi/mask/fungi_contigs.masked.fasta" \
+    -i "${fungi_fa}" \
     -o "${outdir}/fungi/funannotate_out" \
     --species "Fungus_sp_${sample_id}" \
     --cpus "${CPUS}" \
+    --force \
+    --augustus_species anidulans \
     > "${outdir}/fungi/funannotate.predict.stdout.log" \
     2> "${outdir}/fungi/funannotate.predict.stderr.log" || true
 
@@ -893,3 +895,4 @@ elif [[ -n "${SAMPLES_FILE}" ]]; then
 else
   die "Provide --sample <id> or --samples-file <file>"
 fi
+
