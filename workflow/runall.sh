@@ -59,11 +59,21 @@ DO_QUAL_LEN_FILTER=1
 RUN_DOWNSTREAM_AMPS=0
 RUN_DOWNSTREAM_MAP=0
 
+RUN_MACREL_ATTACH=0
+PREDICTED_SMORFS_TSV=""
+MACREL_ID_COL="feature_id"
+MACREL_SEQ_COL=""
+MACREL_ATTACH_OUT=""
+
 MIN_Q="10"
 MIN_LEN="500"
 MAX_LEN="0"
 
 BATCH_ID="batch1"
+
+# Global MetaFlye assembly
+GLOBAL_ASSEMBLY=0
+GLOBAL_ID="GLOBAL"
 
 usage() {
   echo "Usage: bash workflow/runall.sh [options]"
@@ -103,6 +113,8 @@ usage() {
   echo "  -h, --help            Show help"
   echo "Assembly:"
   echo "  --run-metaflye        Run metagenome assembly with Flye --meta (default: OFF)"
+  echo "  --global                 Run a single global co-assembly using all FASTQs in data/"
+  echo "  --global-id STR           SampleID name for global assembly (default: GLOBAL)"
   echo
   echo "Batch:"
   echo "  --batch-id STR        Batch identifier for NanoPlot/NanoStat labeling (default: batch1)"
@@ -152,6 +164,15 @@ while [[ $# -gt 0 ]]; do
       shift 1
       ;;
 
+    --global)
+      GLOBAL_ASSEMBLY=1
+      shift 1
+      ;;
+    --global-id)
+      GLOBAL_ID="$2"
+      shift 2
+      ;;
+
     --batch-id) BATCH_ID="$2"; shift 2 ;;
 
     --run-filtering) RUN_FILTERING=1; shift 1 ;;
@@ -199,6 +220,32 @@ while [[ $# -gt 0 ]]; do
     --run-downstream-amps) RUN_DOWNSTREAM_AMPS=1; shift 1 ;;
     --run-downstream-map) RUN_DOWNSTREAM_MAP=1; shift 1 ;;
     --downstream-full) RUN_DOWNSTREAM=1; RUN_DOWNSTREAM_AMPS=1; RUN_DOWNSTREAM_MAP=1; shift 1 ;;
+
+    --macrel-attach-only)
+      RUN_QC=0
+      RUN_ASSEMBLY=0
+      RUN_METAFlyE=0
+      RUN_SMORFS=0
+      RUN_DOWNSTREAM=1
+      RUN_MACREL_ATTACH=1
+      shift 1
+      ;;
+    --predicted-smorfs)
+      PREDICTED_SMORFS_TSV="$2"
+      shift 2
+      ;;
+    --id-col)
+      MACREL_ID_COL="$2"
+      shift 2
+      ;;
+    --seq-col)
+      MACREL_SEQ_COL="$2"
+      shift 2
+      ;;
+    --macrel-attach-out)
+      MACREL_ATTACH_OUT="$2"
+      shift 2
+      ;;
 
     *) echo "Unknown argument: $1"; usage ;;
   esac
@@ -317,12 +364,23 @@ if [[ "${RUN_ASSEMBLY}" -eq 1 && "${RUN_METAFlyE}" -eq 1 ]]; then
     echo
   } >>"${MF_OUT_LOG}" 2>>"${MF_ERR_LOG}"
 
-  PARTITION="$PARTITION" TIME="$TIME" CPUS="$CPUS" MEM="$MEM" WDIR="$WDIR" \
-  RESULTS_DIR="$RESULTS_DIR" FASTQ_DIR="data" METADATA_MAP="metadata/metagenome_files.txt" \
-  SAMPLE_COL="SampleID" FASTQ_COL="FASTQ_Filename" \
-  bash workflow/submit_metaflye_array.sh \
-    >>"${MF_OUT_LOG}" \
-    2>>"${MF_ERR_LOG}"
+  if [[ "${GLOBAL_ASSEMBLY}" -eq 1 ]]; then
+    echo ">>> MetaFlye GLOBAL co-assembly (SampleID=${GLOBAL_ID})" | tee -a "$MF_OUT_LOG"
+
+    PARTITION="$PARTITION" TIME="$TIME" CPUS="$CPUS" MEM="$MEM" WDIR="$WDIR" \
+    RESULTS_DIR="$RESULTS_DIR" FASTQ_DIR="data" \
+    bash workflow/submit_metaflye_array.sh \
+      --global --global-id "${GLOBAL_ID}" \
+      >>"${MF_OUT_LOG}" \
+      2>>"${MF_ERR_LOG}"
+  else
+    PARTITION="$PARTITION" TIME="$TIME" CPUS="$CPUS" MEM="$MEM" WDIR="$WDIR" \
+    RESULTS_DIR="$RESULTS_DIR" FASTQ_DIR="data" METADATA_MAP="metadata/metagenome_files.txt" \
+    SAMPLE_COL="SampleID" FASTQ_COL="FASTQ_Filename" \
+    bash workflow/submit_metaflye_array.sh \
+      >>"${MF_OUT_LOG}" \
+      2>>"${MF_ERR_LOG}"
+  fi
 
 fi
 
@@ -369,6 +427,17 @@ if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
   # Build downstream CLI arguments
   DS_ARGS=( --results-dir "$RESULTS_DIR" --metrics-env "$METRICS_ENV" )
 
+  if [[ "${RUN_MACREL_ATTACH}" -eq 1 ]]; then
+    DS_ARGS+=( --macrel-attach-only )
+    DS_ARGS+=( --predicted-smorfs "$PREDICTED_SMORFS_TSV" )
+    DS_ARGS+=( --id-col "$MACREL_ID_COL" )
+    DS_ARGS+=( --seq-col "$MACREL_SEQ_COL" )
+
+    if [[ -n "${MACREL_ATTACH_OUT}" ]]; then
+      DS_ARGS+=( --macrel-attach-out "$MACREL_ATTACH_OUT" )
+    fi
+  fi
+
   if [[ "${RUN_DOWNSTREAM_AMPS}" -eq 1 ]]; then
     DS_ARGS+=( --run-amps )
   fi
@@ -380,6 +449,17 @@ if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
   SRUN_CONSTRAINT=()
   if [[ -n "${CONSTRAINT}" ]]; then
     SRUN_CONSTRAINT=( --constraint="${CONSTRAINT}" )
+  fi
+
+  if [[ "${RUN_MACREL_ATTACH}" -eq 1 ]]; then
+    if [[ -z "${PREDICTED_SMORFS_TSV}" ]]; then
+      echo "ERROR: --predicted-smorfs must be provided with --macrel-attach-only"
+      exit 1
+    fi
+    if [[ -z "${MACREL_SEQ_COL}" ]]; then
+      echo "ERROR: --seq-col must be provided with --macrel-attach-only"
+      exit 1
+    fi
   fi
 
   srun \
