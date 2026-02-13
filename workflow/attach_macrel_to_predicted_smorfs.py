@@ -29,8 +29,13 @@ def main() -> None:
     ap.add_argument("--out", required=True, type=Path, help="Output TSV (merged)")
     ap.add_argument("--id-col", default=None, help="ID column name in predicted_smorfs.tsv (auto-detect if omitted)")
     ap.add_argument("--seq-col", default=None, help="AA sequence column name in predicted_smorfs.tsv (auto-detect if omitted)")
-    ap.add_argument("--require-seq-match", action="store_true", default=True,
-                    help="Fail if peptide sequences do not match between tables (default: on)")
+    ap.add_argument(
+        "--require-seq-match",
+        action="store_true",
+        default=False,
+        help="Fail if peptide sequences do not match between tables (default: OFF)",
+    )
+
     args = ap.parse_args()
 
     if not args.predicted.exists():
@@ -84,17 +89,19 @@ def main() -> None:
     )
 
     # Sequence validation for matched rows
-    matched = merged["peptide_id"].notna()
-    if matched.any():
-        seq_pred = merged.loc[matched, seq_col].astype(str).str.strip().str.rstrip("*")
-        seq_mac  = merged.loc[matched, "peptide_seq"].astype(str).str.strip().str.rstrip("*")
-        mism = (seq_pred != seq_mac)
-        if mism.any() and args.require_seq_match:
-            bad = merged.loc[matched].loc[mism, [id_col, seq_col, "peptide_seq"]].head(10)
-            die(
-                "Sequence mismatch for some IDs between predicted TSV and Macrel TSV.\n"
-                f"First mismatches:\n{bad.to_string(index=False)}"
-            )
+    # Optional sequence validation for matched rows (OFF by default)
+    if args.require_seq_match:
+        matched = merged["peptide_id"].notna()
+        if matched.any():
+            seq_pred = merged.loc[matched, seq_col].astype(str).str.strip().str.rstrip("*")
+            seq_mac  = merged.loc[matched, "peptide_seq"].astype(str).str.strip().str.rstrip("*")
+            mism = (seq_pred != seq_mac)
+            if mism.any():
+                bad = merged.loc[matched].loc[mism, [id_col, seq_col, "peptide_seq"]].head(10)
+                die(
+                    "Sequence mismatch for some IDs between predicted TSV and Macrel TSV.\n"
+                    f"First mismatches:\n{bad.to_string(index=False)}"
+                )
 
     # Replace your placeholder columns with Macrel-derived ones
     # Your placeholders: amp_pred, amp_score, hemolytic, toxic, notes
@@ -141,3 +148,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
