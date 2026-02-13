@@ -214,34 +214,29 @@ step_c_macrel_attach_predicted_smorfs() {
   local macrel_tsv="${outdir}/macrel_predictions.normalized.tsv"
   local merged_tsv
 
-  if [[ -n "${MACREL_ATTACH_OUT}" ]]; then
+  if [[ -n "${MACREL_ATTACH_OUT:-}" ]]; then
     merged_tsv="${MACREL_ATTACH_OUT}"
   else
     merged_tsv="${outdir}/predicted_smorfs.with_macrel.tsv"
   fi
 
   msg "Building peptide FASTA for Macrel from: ${PREDICTED_SMORFS_TSV}"
-  python - <<'PY'
+  python - "${PREDICTED_SMORFS_TSV}" "${peptides_faa}" "${MACREL_ID_COL:-feature_id}" "${MACREL_SEQ_COL}" <<'PY'
 import sys
 import pandas as pd
 from pathlib import Path
 
 tsv = Path(sys.argv[1])
 faa = Path(sys.argv[2])
+id_col = sys.argv[3]
+seq_col = sys.argv[4]
 
 df = pd.read_csv(tsv, sep="\t", dtype=str)
 
-def pick(cols, cands):
-    lower = {c.lower(): c for c in cols}
-    for x in cands:
-        if x.lower() in lower:
-            return lower[x.lower()]
-    return None
-
-id_col = pick(df.columns.tolist(), ["peptide_id","smorf_id","orf_id","id","accession","name","seqid"])
-seq_col = pick(df.columns.tolist(), ["peptide_seq","aa_seq","aa","sequence","pep_seq","peptide"])
-if not id_col or not seq_col:
-    raise SystemExit(f"ERROR: Could not detect id/seq columns. Columns={df.columns.tolist()}")
+if id_col not in df.columns:
+    raise SystemExit(f"ERROR: id-col '{id_col}' not found. Columns={df.columns.tolist()}")
+if seq_col not in df.columns:
+    raise SystemExit(f"ERROR: seq-col '{seq_col}' not found. Columns={df.columns.tolist()}")
 
 df[id_col] = df[id_col].astype(str).str.strip()
 df[seq_col] = df[seq_col].astype(str).str.strip()
@@ -252,16 +247,14 @@ if df[id_col].duplicated().any():
 
 with faa.open("w") as out:
     for pid, seq in zip(df[id_col], df[seq_col]):
-        if not pid or pid == "nan":
+        if not pid or pid.lower() == "nan":
             continue
-        if not seq or seq == "nan":
+        if not seq or seq.lower() == "nan":
             continue
         out.write(f">{pid}\n{seq}\n")
 
 print(f"Wrote FASTA: {faa}", file=sys.stderr)
-PY \
-  "${PREDICTED_SMORFS_TSV}" \
-  "${peptides_faa}"
+PY
 
   msg "Running Macrel via workflow/predict_amps.py"
   python workflow/predict_amps.py "${peptides_faa}" \
@@ -273,8 +266,8 @@ PY \
     --predicted "${PREDICTED_SMORFS_TSV}" \
     --macrel "${macrel_tsv}" \
     --out "${merged_tsv}" \
-    --id-col feature_id \
-    --seq-col aa_seq
+    --id-col "${MACREL_ID_COL:-feature_id}" \
+    --seq-col "${MACREL_SEQ_COL}"
 
   msg "Wrote merged file: ${merged_tsv}"
 }
