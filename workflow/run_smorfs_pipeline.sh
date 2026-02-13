@@ -493,46 +493,68 @@ run_funannotate_fungi() {
     return 0
   fi
 
-  msg "[${sample_id}] Running funannotate predict on fungal contigs (minimal run)"
-  msg "[${sample_id}] NOTE: funannotate often needs databases set up (funannotate setup)."
+  # Require FUNANNOTATE_DB (otherwise predict will fail later)
   if [[ -n "${FUNANNOTATE_DB_DIR}" ]]; then
-    msg "[${sample_id}] Using FUNANNOTATE_DB_DIR=${FUNANNOTATE_DB_DIR}"
     export FUNANNOTATE_DB="${FUNANNOTATE_DB_DIR}"
   fi
-
   if [[ -z "${FUNANNOTATE_DB:-}" ]]; then
-    msg "[${sample_id}] WARNING: FUNANNOTATE_DB is not set; funannotate predict may fail."
-  else
-    msg "[${sample_id}] FUNANNOTATE_DB=${FUNANNOTATE_DB}"
+    msg "[${sample_id}] WARNING: FUNANNOTATE_DB is not set; skipping funannotate."
+    return 0
+  fi
+  msg "[${sample_id}] FUNANNOTATE_DB=${FUNANNOTATE_DB}"
+
+  # If "fungi bucket" is extremely small, funannotate/BUSCO training often fails/crashes.
+  # Skip predict in that case (still keep the split contigs outputs).
+  local fungi_bp
+  fungi_bp="$(seqkit stats -T "${fungi_fa}" 2>/dev/null | awk 'NR==2{print $5}')"
+  fungi_bp="${fungi_bp:-0}"
+  if [[ "${fungi_bp}" -lt 1000000 ]]; then
+    msg "[${sample_id}] NOTE: fungi_contigs total_bp=${fungi_bp} (<1,000,000 bp). Too small for funannotate/BUSCO; skipping funannotate predict."
+    return 0
   fi
 
+  msg "[${sample_id}] Running funannotate mask (softmask repeats)"
   mkdir -p "${outdir}/fungi/mask"
+  local masked_fa="${outdir}/fungi/mask/fungi_contigs.masked.fasta"
   funannotate mask \
     -i "${fungi_fa}" \
-    -o "${outdir}/fungi/mask/fungi_contigs.masked.fasta" \
+    -o "${masked_fa}" \
     > "${outdir}/fungi/mask/funannotate.mask.stdout.log" \
     2> "${outdir}/fungi/mask/funannotate.mask.stderr.log" || true
 
-  # Minimal example: funannotate predict -i genome.fasta -o out --species "Name" --cpus N :contentReference[oaicite:13]{index=13}
+  # Use masked fasta if it exists, otherwise fall back to input
+  local predict_input="${fungi_fa}"
+  if [[ -s "${masked_fa}" ]]; then
+    predict_input="${masked_fa}"
+  else
+    msg "[${sample_id}] WARNING: masked fasta not created; using unmasked input for predict (may fail unless --force)."
+  fi
+
+  msg "[${sample_id}] Running funannotate predict"
+  local predict_ok=0
   funannotate predict \
-    -i "${fungi_fa}" \
+    -i "${predict_input}" \
     -o "${outdir}/fungi/funannotate_out" \
     --species "Fungus_sp_${sample_id}" \
     --cpus "${CPUS}" \
     --force \
-    --augustus_species anidulans \
     > "${outdir}/fungi/funannotate.predict.stdout.log" \
-    2> "${outdir}/fungi/funannotate.predict.stderr.log" || true
+    2> "${outdir}/fungi/funannotate.predict.stderr.log" || predict_ok=$?
 
-  # Find predicted protein FASTA (funannotate output naming can vary by version/config)
+  if [[ "${predict_ok}" -ne 0 ]]; then
+    msg "[${sample_id}] WARNING: funannotate predict failed (exit=${predict_ok}). Skipping fungal peptide extraction."
+    return 0
+  fi
+
+  # Find predicted proteins FASTA (per funannotate docs, often under predict_results and named *.proteins.fa)
   msg "[${sample_id}] Locating funannotate predicted proteins FASTA"
   local prot_fa
-  prot_fa="$(find "${outdir}/fungi/funannotate_out" -maxdepth 3 -type f \
-              \( -iname "*protein*.fa" -o -iname "*protein*.faa" -o -iname "*proteins*.fa" -o -iname "*proteins*.faa" \) \
+  prot_fa="$(find "${outdir}/fungi/funannotate_out" -maxdepth 6 -type f \
+              \( -iname "*proteins*.fa" -o -iname "*proteins*.faa" -o -iname "*.proteins.fa" -o -iname "*.proteins.faa" \) \
               | head -n 1 || true)"
 
-  if [[ -z "${prot_fa}" ]]; then
-    msg "[${sample_id}] WARNING: Could not find a proteins FASTA under funannotate output. Check logs."
+  if [[ -z "${prot_fa}" || ! -s "${prot_fa}" ]]; then
+    msg "[${sample_id}] WARNING: Could not find a proteins FASTA under funannotate output. Check predict logs."
     return 0
   fi
 
