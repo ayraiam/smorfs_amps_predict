@@ -470,12 +470,10 @@ run_smorfinder_bac() {
 
   local TF_ENV_PREFIX="${PROJECT_ROOT}/${ENV_PREFIX_DIR}/smorf_tf_env"
 
-  # Run from the per-sample smorfinder folder so smorf_output/ lands here (not where you launched runall.sh)
-  conda run -p "${TF_ENV_PREFIX}" bash -lc "
-    set -euo pipefail
-    cd '${outdir}/bac/smorfinder'
-    smorf meta '${outdir}/contigs/bac_contigs.fasta' --threads '${CPUS}'
-  " \
+  msg "[${sample_id}] Running SmORFinder (TF env) on: ${outdir}/contigs/bac_contigs.fasta"
+
+  conda run -p "${TF_ENV_PREFIX}" \
+    smorf meta "${outdir}/contigs/bac_contigs.fasta" --threads "${CPUS}" \
     > "${outdir}/bac/smorfinder/smorfinder.stdout.log" \
     2> "${outdir}/bac/smorfinder/smorfinder.stderr.log" || true
 
