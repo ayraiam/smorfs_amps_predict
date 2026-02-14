@@ -78,6 +78,10 @@ def main() -> None:
         dups = pred.loc[pred[id_col].duplicated(), id_col].head(10).tolist()
         die(f"predicted TSV has duplicated IDs in {id_col}. Example duplicates: {dups}")
 
+    # Drop placeholder columns from predicted table (we'll append Macrel columns instead)
+    placeholders = ["amp_pred", "amp_score", "hemolytic", "toxic", "notes"]
+    pred = pred.drop(columns=[c for c in placeholders if c in pred.columns], errors="ignore")
+
     # Macrel might output only predicted AMPs depending on version/settings.
     # We do a left join and fill missing predictions with NA.
     merged = pred.merge(
@@ -103,45 +107,6 @@ def main() -> None:
                     f"First mismatches:\n{bad.to_string(index=False)}"
                 )
 
-    # Replace your placeholder columns with Macrel-derived ones
-    # Your placeholders: amp_pred, amp_score, hemolytic, toxic, notes
-    # Macrel provides: amp_pred (bool/label), amp_prob, hemo_pred, hemo_prob, macrel_class (optional)
-    macrel_amp_pred = "amp_pred"
-    macrel_amp_score = "amp_prob"
-    macrel_hemo_pred = "hemo_pred"
-    macrel_hemo_prob = "hemo_prob"
-    macrel_notes = "macrel_class" if "macrel_class" in merged.columns else None
-
-    def set_or_create(col: str, series):
-        merged[col] = series
-
-    # If Macrel didn't produce negatives, unmatched rows will be NA (fine).
-    set_or_create("amp_pred", merged[macrel_amp_pred] if macrel_amp_pred in merged.columns else pd.NA)
-    set_or_create("amp_score", merged[macrel_amp_score] if macrel_amp_score in merged.columns else pd.NA)
-    set_or_create("hemolytic", merged[macrel_hemo_pred] if macrel_hemo_pred in merged.columns else pd.NA)
-
-    # Macrel does not predict toxicity; set NA (or keep old if you prefer)
-    if "toxic" in merged.columns:
-        merged["toxic"] = pd.NA
-    else:
-        merged.insert(merged.columns.get_loc("hemolytic") + 1, "toxic", pd.NA)
-
-    if macrel_notes:
-        set_or_create("notes", merged[macrel_notes])
-    else:
-        # keep existing notes if present; otherwise NA
-        if "notes" not in merged.columns:
-            merged["notes"] = pd.NA
-
-    # Drop Macrel join helper columns (optional)
-    # keep peptide_id/peptide_seq from macrel? usually redundant with your own.
-    drop_cols = []
-    for c in ["peptide_id", "peptide_seq", "source_fasta", "macrel_version"]:
-        if c in merged.columns:
-            drop_cols.append(c)
-    merged = merged.drop(columns=drop_cols, errors="ignore")
-
-    args.out.parent.mkdir(parents=True, exist_ok=True)
     merged.to_csv(args.out, sep="\t", index=False)
     print(f"Wrote merged TSV: {args.out}", file=sys.stderr)
 
