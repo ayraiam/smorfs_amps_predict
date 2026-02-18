@@ -135,6 +135,10 @@ gather_fastq_files() {
 run_fastqc_all() {
   local OUTDIR="$1"
   mkdir -p "${OUTDIR}"
+
+  # Limit Java heap used by FastQC (tune as needed)
+  export _JAVA_OPTIONS="-Xmx2g"
+
   fastqc -t "${THREADS}" -o "${OUTDIR}" "${FASTQ_FILES[@]}"
 }
 
