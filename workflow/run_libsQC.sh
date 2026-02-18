@@ -136,8 +136,13 @@ run_fastqc_all() {
   local OUTDIR="$1"
   mkdir -p "${OUTDIR}"
 
-  # Limit Java heap used by FastQC (tune as needed)
-  export _JAVA_OPTIONS="-Xmx2g"
+  if [[ -n "${SLURM_MEM_PER_NODE:-}" ]]; then
+    # SLURM_MEM_PER_NODE is MB. Use ~75% for Java heap, cap if you want.
+    HEAP_MB=$(( SLURM_MEM_PER_NODE * 75 / 100 ))
+    export _JAVA_OPTIONS="-Xmx${HEAP_MB}m"
+  else
+    export _JAVA_OPTIONS="-Xmx8g"
+  fi
 
   fastqc -t "${THREADS}" -o "${OUTDIR}" "${FASTQ_FILES[@]}"
 }
