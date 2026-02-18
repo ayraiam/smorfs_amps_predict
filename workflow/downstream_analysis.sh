@@ -214,7 +214,8 @@ step_c_macrel_attach_predicted_smorfs() {
   outdir="$(dirname "${PREDICTED_SMORFS_TSV}")"
 
   local peptides_faa="${outdir}/predicted_smorfs.peptides_for_macrel.faa"
-  local macrel_tsv="${outdir}/macrel_predictions.normalized.tsv"
+  local rejected_tsv="${outdir}/predicted_smorfs.peptides_for_macrel.rejected.tsv"
+  local macrel_tsv="${outdir}/macrel_predictions.normalized.tsv predominan"
   local merged_tsv
 
   if [[ -n "${MACREL_ATTACH_OUT:-}" ]]; then
@@ -224,15 +225,21 @@ step_c_macrel_attach_predicted_smorfs() {
   fi
 
   msg "Building peptide FASTA for Macrel from: ${PREDICTED_SMORFS_TSV}"
-  python - "${PREDICTED_SMORFS_TSV}" "${peptides_faa}" "${MACREL_ID_COL:-feature_id}" "${MACREL_SEQ_COL}" <<'PY'
+  msg "  ID col : ${MACREL_ID_COL:-feature_id}"
+  msg "  SEQ col: ${MACREL_SEQ_COL}"
+  msg "  FASTA  : ${peptides_faa}"
+  msg "  Reject : ${rejected_tsv}"
+
+  python - "${PREDICTED_SMORFS_TSV}" "${peptides_faa}" "${rejected_tsv}" "${MACREL_ID_COL:-feature_id}" "${MACREL_SEQ_COL}" <<'PY'
 import sys
 import pandas as pd
 from pathlib import Path
 
 tsv = Path(sys.argv[1])
 faa = Path(sys.argv[2])
-id_col = sys.argv[3]
-seq_col = sys.argv[4]
+rej = Path(sys.argv[3])
+id_col = sys.argv[4]
+seq_col = sys.argv[5]
 
 df = pd.read_csv(tsv, sep="\t", dtype=str)
 
@@ -248,16 +255,41 @@ if df[id_col].duplicated().any():
     dups = df.loc[df[id_col].duplicated(), id_col].head(10).tolist()
     raise SystemExit(f"ERROR: duplicated IDs in {id_col}. Examples: {dups}")
 
-with faa.open("w") as out:
-    for pid, seq in zip(df[id_col], df[seq_col]):
-        if not pid or pid.lower() == "nan":
-            continue
-        if not seq or seq.lower() == "nan":
-            continue
-        seq = str(seq).strip().replace("\r", "").rstrip("*")
-        out.write(f">{pid}\n{seq}\n")
+ok = set("ACDEFGHIKLMNPQRSTVWY")
 
-print(f"Wrote FASTA: {faa}", file=sys.stderr)
+n_out = 0
+n_bad = 0
+n_empty = 0
+
+with faa.open("w") as out, rej.open("w") as r:
+    r.write("peptide_id\tbad_chars\tpeptide_seq\n")
+
+    for pid, seq in zip(df[id_col], df[seq_col]):
+        if not pid or str(pid).lower() == "nan":
+            n_empty += 1
+            continue
+        if not seq or str(seq).lower() == "nan":
+            n_empty += 1
+            continue
+
+        pid = str(pid).strip()
+        seq = str(seq).strip().replace("\r", "").replace(" ", "").upper().rstrip("*")
+
+        if not seq:
+            n_empty += 1
+            continue
+
+        bad = sorted({c for c in seq if c not in ok})
+        if bad:
+            n_bad += 1
+            r.write(f"{pid}\t{''.join(bad)}\t{seq}\n")
+            continue
+
+        out.write(f">{pid}\n{seq}\n")
+        n_out += 1
+
+print(f"Wrote FASTA: {faa} (kept={n_out}, rejected={n_bad}, empty={n_empty})", file=sys.stderr)
+print(f"Rejected list: {rej}", file=sys.stderr)
 PY
 
   msg "Running Macrel via workflow/predict_amps.py"
@@ -274,6 +306,7 @@ PY
     --seq-col "${MACREL_SEQ_COL}"
 
   msg "Wrote merged file: ${merged_tsv}"
+  msg "If Macrel still fails, inspect rejected peptides: ${rejected_tsv}"
 }
 
 # ---------------------------
