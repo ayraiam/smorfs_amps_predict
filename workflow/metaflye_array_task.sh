@@ -11,7 +11,7 @@
 # ==========================================================
 set -euo pipefail
 
-RESULTS_DIR="${RESULTS_DIR:-results}"
+RESULTS_DIR="${RESULTS_DIR:-/scratch/t.sousa/data_used}"
 THREADS="${THREADS:-8}"
 
 ENV_NAME="${METAFlyE_ENV_NAME:-metaflye}"
@@ -136,7 +136,15 @@ build_coassembly_reads() {
       nanopore_shotgun_RDS26_L02-4500-low_07.fastq.gz| \
       nanopore_shotgun_RDS26_L02-4500-normal_15.fastq.gz| \
       nanopore_shotgun_RDS26_LO2-500-low_03.fastq.gz| \
-      nanopore_shotgun_RDS26_LO2-500-normal_11.fastq.gz)
+      nanopore_shotgun_RDS26_LO2-500-normal_11.fastq.gz| \
+      nanopore_shotgun_RDS26_L01-3050-low_02.fastq.gz| \
+      nanopore_shotgun_RDS26_L01-3050-normal_10.fastq.gz| \
+      nanopore_shotgun_RDS26_L02-2900-low_05.fastq.gz| \
+      nanopore_shotgun_RDS26_L02-2900-normal_13.fastq.gz| \
+      nanopore_shotgun_RDS26_L02-4350-low_06.fastq.gz| \
+      nanopore_shotgun_RDS26_L02-4350-normal_14.fastq.gz| \
+      nanopore_shotgun_RDS26_NS1-50-low_01.fastq.gz| \
+      nanopore_shotgun_RDS26_NS1-50-normal_09.fastq.gz)
         return 0
         ;;
       *)
