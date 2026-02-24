@@ -510,6 +510,7 @@ if [[ "${RUN_REFINE_BACS}" -eq 1 ]]; then
 
   echo ">>> refine_annot_smorf_bacs submitted as job ${REFINE_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
   echo ">>> refine logs: ${REFINE_OUT_LOG} / ${REFINE_ERR_LOG}" | tee -a "$OUT_LOG" "$CMD_LOG"
+fi
 
 if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
   echo ">>> Running downstream analysis (flye.log -> metrics + boxplots) ..." | tee -a "$OUT_LOG" "$CMD_LOG"
