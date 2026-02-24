@@ -16,60 +16,62 @@
 <pre>
 ABOUT
 -----
-smorfs_amps_predict is a lightweight, reproducible pipeline for
-Oxford Nanopore shotgun metagenomic data, providing a modular, HPC-native framework for reproducible smORF and antimicrobial peptide (AMP) discovery.
+smorfs_amps_predict is a lightweight, reproducible, HPC-native pipeline for
+Oxford Nanopore shotgun metagenomic data, providing a modular framework for:
 
-The pipeline combines:
   1) Read-level quality control and diagnostics (safe, read-only by default)
-  2) Scalable metagenome co-assembly using Flye (--meta), supporting both:
-     - per-sample (SampleID) co-assemblies
-     - single global co-assembly across all libraries
-     Parallelized via Slurm arrays
-  3) Optional, on-demand smORF prediction (bacterial + fungal) on existing assemblies
-  4) Optional downstream analysis of MetaFlye assemblies (flye.log → metrics TSV + boxplots)
-  5) AMP prediction via Macrel, supporting:
-     - Global non-redundant peptide catalog clustering + prediction
-     - Direct annotation of per-sample predicted_smorfs.tsv files (ID-safe merge)
+  2) Scalable metagenome co-assembly using Flye (--meta)
+     • Per-sample (SampleID) co-assemblies
+     • Single global co-assembly across all libraries
+  3) On-demand smORF prediction (bacterial + fungal)
+  4) AMP prediction via Macrel (two operational modes)
+  5) Bacterial smORF refinement based on genomic context
+  6) Downstream assembly metrics + visualization
 
+All major stages are explicitly decoupled:
+  - QC once → reuse
+  - Assembly without repeating QC
+  - smORFs independently
+  - AMP prediction independently
+  - Refinement independently
+  - Downstream analysis independently
 
-QC, assembly, smORF prediction, and downstream analysis are explicitly decoupled:
-  - Run QC once, reuse outputs
-  - Re-run assembly without repeating QC
-  - Run smORFs later (or re-run) without repeating QC/assembly
-  - Run downstream analysis after assemblies are available (no FASTQs required)
-
-QC diagnostics are batch-aware, enabling direct comparison of
-multiple sequencing batches without overwriting results.
+This design enables reproducibility, re-entrancy, and HPC-scalable workflows.
 </pre>
+
+---
 
 <pre>
 STRUCTURE
 ---------
  /workflow/
-   runall.sh                    - main Slurm launcher (QC + assembly; optional smORFs submission)
-   run_libsQC.sh                - QC logic (FastQC, NanoPlot, NanoStat, SeqKit)
-   submit_metaflye_array.sh     - submits Flye Slurm array (per-sample or global co-assembly)
-   metaflye_array_task.sh       - per-array-task Flye runner (uses scratch for temp reads)
-   run_smorfs_pipeline.sh       - smORFs pipeline on assemblies
-   downstream_analysis.sh       - downstream analysis (Flye metrics, AMP prediction, read-back mapping)
-   summarize_flye_logs.py       - parse Flye logs into a metrics table
-   plot_metaflye_metrics.R      - generate per-metric boxplots from metrics TSV
-   predict_amps.py              - AMP prediction using Macrel
-   attach_macrel_to_predicted_smorfs.py - merge Macrel predictions back into predicted_smorfs.tsv (ID-validated)
- /envs/                         - Conda environments (created on demand)
- /logs/                         - timestamped Slurm logs
+   runall.sh                               - Main Slurm launcher
+   run_libsQC.sh                           - QC logic (FastQC, NanoPlot, NanoStat, SeqKit)
+   submit_metaflye_array.sh                - Flye Slurm array submission
+   metaflye_array_task.sh                  - Per-array Flye runner (scratch-aware)
+   run_smorfs_pipeline.sh                  - smORF discovery pipeline
+   smorfs_job.sh                           - Slurm wrapper for smORFs
+   run_refine_annot_smorf_bacs.sh          - Bacterial refinement stage
+   refine_bacs_job.sh                      - Slurm wrapper for refinement
+   refine_bacs.py                          - Genomic-context refinement logic
+   downstream_analysis.sh                  - Flye metrics + AMP utilities
+   summarize_flye_logs.py                  - Parse Flye logs into metrics table
+   plot_metaflye_metrics.R                 - Boxplots from metrics TSV
+   predict_amps.py                         - Macrel-based AMP prediction
+   attach_macrel_to_predicted_smorfs.py    - Safe Macrel merge (ID-validated)
+
+ /envs/                                    - Conda environments (auto-created)
+ /logs/                                    - Timestamped Slurm logs
  /metadata/
-   metagenome_files.txt         - SampleID ↔ FASTQ mapping (per-sample mode)
-   metaflye_sampleids_*.list    - SampleID → array task mapping
-   metaflye_sample_fastqs_*.tsv - SampleID ↔ FASTQ map (absolute paths, normalized)
-   sample_ids.txt               - list of SampleIDs for smORFs runs
- /data/                         - input FASTQ(.gz) files (read-only; may be symlinks)
+   metagenome_files.txt
+   metaflye_sampleids_*.list
+   metaflye_sample_fastqs_*.tsv
+   sample_ids.txt
+ /data/                                    - Input FASTQ(.gz) files (read-only)
  /results/
-   qc_pre_filt/                 - QC outputs on raw reads (batch-aware)
-   qc_post_filt/                - QC outputs after filtering (optional)
-   assembly_metaflye/           - MetaFlye assemblies (per-sample or global)
-     finalize_metrics.tsv
-     finalize_boxplots/
+   qc_pre_filt/
+   qc_post_filt/
+   assembly_metaflye/
    smorfs/
    catalog_global/
  README.md
@@ -77,102 +79,126 @@ STRUCTURE
  CITATION.cff
 </pre>
 
+---
+
 <pre>
 DESIGN PRINCIPLES
 -----------------
- - Explicit separation of QC, assembly, smORFs, and downstream analysis stages
- - QC-only by default (no FASTQ files are modified)
- - Assembly is opt-in and parallelized via Slurm arrays
- - Supports both per-sample and global co-assembly modes
- - smORFs and downstream analysis are opt-in and decoupled
- - AMP prediction supports:
-     • Global non-redundant peptide catalogs (mmseqs clustered)
-     • Direct annotation of per-sample predicted_smorfs.tsv files
- - Deterministic ID-safe merging ensures Macrel predictions match exact peptide sequences
- - Sequence mismatches trigger hard failure (no silent corruption)
- - Reproducible Conda environments (created if missing)
- - HPC-native design (Slurm + srun / sbatch)
- - Transparent logging, resumability, and provenance
- - Batch-aware QC for multi-run and longitudinal projects
- - Large temporary files are written to scratch and cleaned up automatically
+ - Explicit stage separation (QC → Assembly → smORFs → AMP → Refinement → Downstream)
+ - QC-only by default (no FASTQs modified)
+ - Assembly opt-in, parallelized via Slurm arrays
+ - Supports per-sample and global co-assembly
+ - smORFs and refinement fully decoupled from assembly
+ - Deterministic ID-safe Macrel merging
+ - Hard failure on sequence mismatches (no silent corruption)
+ - Automatic Conda environment creation
+ - Slurm-native orchestration (srun + sbatch)
+ - Transparent logging, resumability, provenance tracking
+ - Scratch-aware temporary file handling
+ - Batch-aware QC for multi-run projects
 </pre>
+
+---
 
 <pre>
-SCRATCH USAGE
--------------
-For disk safety and scalability, large temporary co-assembly FASTQ files
-are written to scratch storage during MetaFlye runs and deleted automatically
-after assembly completes.
+BACTERIAL smORF REFINEMENT
+--------------------------
+After smORF prediction (and optional Macrel AMP annotation),
+the pipeline supports a bacterial refinement stage that:
 
-Specifically:
- - Co-assembled reads are written to:
-     /scratch/t.sousa/data_used/metaflye_tmp/<SampleID>/
- - These files are removed automatically after Flye finishes
- - Final assemblies, logs, and metrics are always written to the project directory
+  • Integrates Prodigal GFF annotations
+  • Integrates bacterial contig FASTA
+  • Builds genomic-context dictionaries
+  • Evaluates structural context of predicted smORFs
+  • Produces refined TSV outputs
+
+Current refinement framework includes fields for:
+
+  flag_edge
+  dist_left / dist_right
+  flag_embedded
+  flag_overlap_fraction
+  host_cds_id
+  cluster_id / cluster_size
+  cluster_env_count
+  flag_cluster_recurrent
+  flag_cross_environment
+  flag_too_short
+  confidence_tier
+
+Refinement is designed to classify predictions into confidence tiers
+based on genomic context and recurrence, enabling structured downstream filtering.
+
+Refinement is independent and can be run:
+
+  • After smORFs
+  • After Macrel annotation
+  • On existing catalogs
+  • For one sample or multiple samples
+
+If refinement is launched in the same run as smORFs,
+Slurm dependency is automatically enforced (afterok).
 </pre>
 
-<pre>
-GLOBAL CO-ASSEMBLY MODE
-----------------------
-In addition to per-sample (SampleID) co-assembly, the pipeline supports
-a single global metagenome assembly using all FASTQs currently present
-in the data/ directory.
-
-In global mode:
- - All libraries are merged into one co-assembly
- - A single Flye job is submitted
- - Temporary merged reads are written to scratch and deleted automatically
- - Output is written to:
-     results/assembly_metaflye/<GLOBAL_ID>/
-</pre>
+---
 
 <pre>
 MACREL AMP MODES
 ----------------
-The pipeline supports two AMP prediction strategies using Macrel:
+Two AMP prediction strategies are supported:
 
-1) Global NR peptide catalog mode
-   - Concatenates per-sample peptide catalogs
-   - Clusters with mmseqs (protein-level)
-   - Runs Macrel on non-redundant representatives
-   - Outputs:
+1) Global NR Catalog Mode
+   - Concatenate peptide catalogs
+   - Cluster with mmseqs
+   - Run Macrel on non-redundant representatives
+   - Output:
        results/catalog_global/global_nr_peptides.faa
        results/catalog_global/amp_predictions.tsv
 
-2) Direct per-sample annotation mode
+2) Direct Per-Sample Annotation Mode
    - Input:
        results/smorfs/<SampleID>/catalog/predicted_smorfs.tsv
-   - Builds FASTA using a stable ID column (recommended: feature_id)
+   - Builds FASTA using stable ID column
    - Runs Macrel
-   - Safely merges predictions back into the original TSV
-   - Validates sequence consistency before merging
+   - Validates sequence identity before merging
    - Output:
        predicted_smorfs.with_macrel.tsv
 
-Direct annotation mode replaces placeholder columns:
-  amp_pred, amp_score, hemolytic, toxic, notes
-
-With Macrel-derived fields:
-  amp_pred, amp_prob, hemo_pred, hemo_prob, macrel_class
+Macrel fields added:
+  amp_pred
+  amp_prob
+  hemo_pred
+  hemo_prob
+  macrel_class
 </pre>
 
+---
 
 <pre>
 STEP CONTROL
 ------------
-QC / Assembly:
-  --qc-only             Run only QC (default behavior)
-  --metaflye-only       Run only metagenome assembly (skip QC)
-  --qc-and-metaflye     Run QC, then submit MetaFlye
 
-MetaFlye modes:
-  --global              Enable single global co-assembly across all FASTQs
-  --global-id STR       SampleID name for global assembly (default: GLOBAL)
+QC / Assembly:
+  --qc-only
+  --metaflye-only
+  --qc-and-metaflye
+
+MetaFlye:
+  --global
+  --global-id STR
 
 smORFs:
-  --smorfs-create-env
   --smorfs-only
   --smorfs-sample STR
+  --smorfs-samples FILE
+  --smorfs-create-env
+
+Refinement (Bacterial):
+  --refine-bacs-only
+  --run-refine-bacs
+  --refine-bacs-sample STR
+  --refine-bacs-samples FILE
+  --refine-bacs-create-env
 
 Downstream:
   --downstream-only
@@ -181,29 +207,29 @@ Downstream:
   --run-downstream-map
   --downstream-full
 
-Macrel attach mode:
+Macrel Attach Mode:
   --macrel-attach-only
   --predicted-smorfs PATH
   --id-col STR
   --seq-col STR
   --macrel-attach-out PATH
-
 </pre>
+
+---
 
 <pre>
-ASSEMBLY OUTPUTS (MetaFlye)
---------------------------
-results/assembly_metaflye/
-  <SampleID>/
-    assembly.fasta
-    assembly_info.txt
-    flye.log
+SCRATCH USAGE
+-------------
+Large temporary co-assembly FASTQ files are written to scratch:
 
-Temporary (auto-deleted):
   /scratch/t.sousa/data_used/metaflye_tmp/<SampleID>/
-    reads.coassembly.fastq.gz
-    inputs.fastq.list
+
+These are deleted automatically after Flye completes.
+
+Final assemblies and outputs are always written inside the project directory.
 </pre>
+
+---
 
 <pre>
 EXAMPLES
@@ -215,29 +241,39 @@ bash workflow/runall.sh
 # QC + per-sample MetaFlye
 bash workflow/runall.sh --qc-and-metaflye
 
-# Global co-assembly (default ID = GLOBAL)
+# Global co-assembly
 bash workflow/runall.sh --metaflye-only --global
 
-# Global co-assembly with custom ID
-bash workflow/runall.sh --metaflye-only --global --global-id UNIFORME_GLOBAL
-
-# smORFs on one assembly
+# smORFs on one sample
 bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500
 
-# Annotate predicted_smorfs.tsv with Macrel (via Slurm launcher)
+# Refinement on one sample
+bash workflow/runall.sh --refine-bacs-only --refine-bacs-sample TS-0500
+
+# smORFs + refinement in one run
+bash workflow/runall.sh \
+  --smorfs-only \
+  --smorfs-sample TS-0500 \
+  --run-refine-bacs
+
+# Macrel attach mode
 bash workflow/runall.sh \
   --macrel-attach-only \
   --predicted-smorfs results/smorfs/CAMPINA_GLOBAL/catalog/predicted_smorfs.tsv \
   --id-col feature_id \
   --seq-col aa_seq
-
 </pre>
+
+---
+
+<pre>
 CITATION
 --------
 Lobo, I. (2026).
-smorfs_amps_predict: A reproducible pipeline for quality control,
-metagenome assembly, and on-demand smORF and AMP discovery of
-Nanopore shotgun data.
+smorfs_amps_predict: A reproducible, HPC-native pipeline for
+quality control, metagenome assembly, smORF discovery,
+AMP prediction, and genomic-context refinement
+of Nanopore shotgun data.
 AY:RΔ — data and discovery in flow.
 </pre>
 
