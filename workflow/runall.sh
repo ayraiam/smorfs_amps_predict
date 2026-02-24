@@ -27,7 +27,7 @@ SMORFS_SAMPLE_ID=""        # optional: run only one SampleID
 RUN_DOWNSTREAM=0
 METRICS_ENV="metaflye_metrics_env"
 
-# Output root (per your request)
+# Output root
 RESULTS_DIR="results"
 
 # QC-only by default
@@ -44,6 +44,17 @@ SMORFS_ENV="smorfs_amps_env"
 FUNANNOTATE_DB_DIR=""      # optional; exported to funannotate
 SMORFS_CREATE_ENV=0
 SMORFS_SAMPLES_FILE="metadata/sample_ids.txt"   # default list (one SampleID per line)
+
+# ---------------------------
+# refine_annot_smorf_bacs (bacterial refinement)
+# ---------------------------
+RUN_REFINE_BACS=0
+REFINE_BACS_CREATE_ENV=0
+REFINE_BACS_ENV="refine_annot_smorf_bacs_env"
+REFINE_BACS_SAMPLES_FILE="metadata/sample_ids.txt"   # default list (same style)
+REFINE_BACS_SAMPLE_ID=""                              # optional single sample
+REFINE_BACS_INPUT_TSV=""                              # optional override (advanced)
+REFINE_BACS_JOB_ID=""
 
 # Step control (default: run QC; MetaFlye only if requested)
 RUN_QC=1
@@ -90,6 +101,7 @@ usage() {
   echo "  --metaflye-only       Run only MetaFlye array (skip QC)"
   echo "  --qc-and-metaflye     Run QC then MetaFlye array"
   echo "  --smorfs-only         Run only smORF discovery on existing MetaFlye assemblies"
+  echo "--refine-bacs-only     Run only bacterial refinement (post Macrel/smORFs)"
   echo
   echo "Mode:"
   echo "  --run-filtering       Enable trimming/filtering step (default: OFF; QC-only)"
@@ -125,6 +137,14 @@ usage() {
   echo "  --smorfs-create-env   Create smORFs conda env and exit"
   echo "  --smorfs-env STR      Conda env name for smORFs pipeline (default: smorfs_amps_env)"
   echo "  --funannotate-db PATH Funannotate DB dir (export FUNANNOTATE_DB_DIR)"
+  echo "Refine (bacteria):"
+  echo "--refine-bacs-only         Submit refine job only (no QC, no assembly, no smORFs)"
+  echo "--run-refine-bacs          Run refine stage in addition to selected steps"
+  echo "--refine-bacs-sample STR   Run refine for ONE SampleID only"
+  echo "--refine-bacs-samples FILE Run refine for SampleIDs in FILE (one per line)"
+  echo "--refine-bacs-create-env   Create refine env and exit"
+  echo "--refine-bacs-env STR      Conda env name (default: refine_annot_smorf_bacs_env)"
+  echo "--refine-bacs-input-tsv P  Optional override TSV path (advanced; usually leave empty)"
   echo "Downstream:"
   echo "  --downstream-only          Run downstream analysis only (parse flye.log + boxplots)"
   echo "  --run-downstream           Run downstream analysis in addition to selected steps (CAUTION: run after assembly finishes)"
@@ -246,6 +266,23 @@ while [[ $# -gt 0 ]]; do
       MACREL_ATTACH_OUT="$2"
       shift 2
       ;;
+			# ---- refine bacs options ----
+	    --refine-bacs-only)
+	      RUN_QC=0
+	      RUN_ASSEMBLY=0
+	      RUN_METAFlyE=0
+	      RUN_SMORFS=0
+	      RUN_DOWNSTREAM=0
+	      RUN_REFINE_BACS=1
+	      shift 1
+	      ;;
+
+	    --run-refine-bacs) RUN_REFINE_BACS=1; shift 1 ;;
+	    --refine-bacs-sample) REFINE_BACS_SAMPLE_ID="$2"; shift 2 ;;
+	    --refine-bacs-samples) REFINE_BACS_SAMPLES_FILE="$2"; shift 2 ;;
+	    --refine-bacs-create-env) REFINE_BACS_CREATE_ENV=1; shift 1 ;;
+	    --refine-bacs-env) REFINE_BACS_ENV="$2"; shift 2 ;;
+	    --refine-bacs-input-tsv) REFINE_BACS_INPUT_TSV="$2"; shift 2 ;;
 
     *) echo "Unknown argument: $1"; usage ;;
   esac
@@ -314,6 +351,15 @@ if [[ "${SMORFS_CREATE_ENV}" -eq 1 ]]; then
   /bin/bash workflow/run_smorfs_pipeline.sh --create-env \
     >>"$OUT_LOG" 2>>"$ERR_LOG"
   echo ">>> Env creation complete. Exiting as requested (--smorfs-create-env)." | tee -a "$OUT_LOG" "$CMD_LOG"
+  exit 0
+fi
+
+if [[ "${REFINE_BACS_CREATE_ENV}" -eq 1 ]]; then
+  echo ">>> Creating refine_bacs env via workflow/run_refine_annot_smorf_bacs.sh --create-env" | tee -a "$OUT_LOG" "$CMD_LOG"
+  /bin/bash workflow/run_refine_annot_smorf_bacs.sh --create-env \
+    --refine-env "${REFINE_BACS_ENV}" \
+    >>"$OUT_LOG" 2>>"$ERR_LOG"
+  echo ">>> Refine env creation complete. Exiting as requested (--refine-bacs-create-env)." | tee -a "$OUT_LOG" "$CMD_LOG"
   exit 0
 fi
 
@@ -412,11 +458,58 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
     --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR}",SMORFS_ENV="${SMORFS_ENV}",SMORFS_RUN_ARGS="${SMORFS_RUN_ARGS}" \
     --output="${SMORFS_OUT_LOG}" \
     --error="${SMORFS_ERR_LOG}" \
-    workflow/smorfs_job.sh
+    workflow/smorfs_job.sh \
+    | awk '{print $NF}'
   )
 
   echo ">>> smORFs submitted as job ${SMORFS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
 fi
+
+if [[ "${RUN_REFINE_BACS}" -eq 1 ]]; then
+  echo ">>> Submitting refine_annot_smorf_bacs job ..." | tee -a "$OUT_LOG" "$CMD_LOG"
+
+  REFINE_RUN_ARGS="--samples-file ${REFINE_BACS_SAMPLES_FILE}"
+  if [[ -n "${REFINE_BACS_SAMPLE_ID}" ]]; then
+    REFINE_RUN_ARGS="--sample ${REFINE_BACS_SAMPLE_ID}"
+    echo ">>> refine will run for ONE SampleID only: ${REFINE_BACS_SAMPLE_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  else
+    echo ">>> refine will run for SampleIDs in: ${REFINE_BACS_SAMPLES_FILE}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  fi
+
+  # Optional override TSV (advanced)
+  if [[ -n "${REFINE_BACS_INPUT_TSV}" ]]; then
+    REFINE_RUN_ARGS="${REFINE_RUN_ARGS} --input-tsv ${REFINE_BACS_INPUT_TSV}"
+  fi
+
+	REFINE_OUT_LOG="logs/refine_bacs_submit_${TS}.out"
+  REFINE_ERR_LOG="logs/refine_bacs_submit_${TS}.err"
+
+  # If smORFs ran in the same runall.sh invocation, make refine depend on it.
+  # SMORFS_JOB_ID will be just the numeric id if you applied the awk fix.
+  REFINE_DEP=()
+  if [[ -n "${SMORFS_JOB_ID:-}" ]]; then
+    REFINE_DEP=( --dependency="afterok:${SMORFS_JOB_ID}" )
+    echo ">>> refine will wait for smORFs job: ${SMORFS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  fi
+
+  REFINE_JOB_ID=$(sbatch \
+    "${REFINE_DEP[@]}" \
+    --partition="${PARTITION}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="${CPUS}" \
+    --mem="${MEM}" \
+    --time="${TIME}" \
+    --chdir="${WDIR}" \
+    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",REFINE_BACS_ENV="${REFINE_BACS_ENV}",REFINE_RUN_ARGS="${REFINE_RUN_ARGS}" \
+    --output="${REFINE_OUT_LOG}" \
+    --error="${REFINE_ERR_LOG}" \
+    workflow/refine_bacs_job.sh \
+    | awk '{print $NF}'
+  )
+
+  echo ">>> refine_annot_smorf_bacs submitted as job ${REFINE_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  echo ">>> refine logs: ${REFINE_OUT_LOG} / ${REFINE_ERR_LOG}" | tee -a "$OUT_LOG" "$CMD_LOG"
 
 if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
   echo ">>> Running downstream analysis (flye.log -> metrics + boxplots) ..." | tee -a "$OUT_LOG" "$CMD_LOG"
