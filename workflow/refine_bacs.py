@@ -268,7 +268,7 @@ def main():
             flag_edge_vals.append("")
             continue
 
-        L = contig_len_norm.get(contig_norm)
+        L = contig_len_raw.get(contig_norm)
         if L is None:
             missing_contigs += 1
             dist_left_vals.append("")
