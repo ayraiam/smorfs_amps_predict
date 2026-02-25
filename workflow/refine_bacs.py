@@ -84,14 +84,17 @@ def normalize_feature_id(fid: str) -> str:
     return fid
 
 
-def tiara_is_bacteria(label: str) -> bool:
-    """
-    Tiara labels vary a bit. In your README you want tiara_label == "bacteria".
-    In practice Tiara can emit: Bacteria / Archaea / Prokarya / etc.
-    Here we keep it strict-ish but helpful.
-    """
-    s = (label or "").strip().lower()
-    return s in {"bacteria", "prokarya", "archaea"}
+def tiara_is_bacteria(label) -> bool:
+    if label is None:
+        return False
+    # pandas NaN shows up as float; also protect weird types
+    if isinstance(label, float):
+        return False
+    s = str(label).strip().lower()
+    if s in ("", "nan", "none"):
+        return False
+    # accept all prok buckets (depending on how tiara wrote it)
+    return any(x in s for x in ("bacteria", "archaea", "prokarya", "prokaryote", "prokaryota"))
 
 
 def main():
@@ -159,7 +162,8 @@ def main():
     # Filter to bacteria (tiara_label)
     n0 = len(df)
     if args.filter_tiara_bacteria:
-        df = df[df["tiara_label"].map(tiara_is_bacteria)].copy()
+        lab = df["tiara_label"].fillna("").astype(str).str.lower().str.strip()
+        df = df[lab.str.contains(r"(bacteria|archaea|prokarya|prokaryot)", regex=True)].copy()
         print(f"[INFO] Filter tiara_label=bacteria/prokarya/archaea: {n0} -> {len(df)} rows")
 
     # Ensure output schema exists
