@@ -13,5 +13,6 @@ echo "CPUS         : ${CPUS:-}"
 echo "============================================"
 
 bash workflow/run_refine_annot_smorf_bacs.sh \
+  --refine-env "${REFINE_BACS_ENV:-refine_annot_smorf_bacs_env}" \
   --run ${REFINE_RUN_ARGS} \
   --cpus "${CPUS:-8}"
