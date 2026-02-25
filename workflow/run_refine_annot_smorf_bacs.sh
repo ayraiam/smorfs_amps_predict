@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Defaults
 ENV_PREFIX_DIR="${ENV_PREFIX_DIR:-envs}"
-REFINE_ENV="refine_annot_smorf_bacs_env"
+REFINE_ENV="${REFINE_BACS_ENV:-refine_annot_smorf_bacs_env}"
 CPUS=8
 MODE=""
 SAMPLE=""
