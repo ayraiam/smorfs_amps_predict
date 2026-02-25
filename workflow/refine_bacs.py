@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import argparse
+import re
 from collections import defaultdict
 
 import pandas as pd
 from Bio import SeqIO
-
 
 def build_contig_len_dict(fasta_path: str) -> dict[str, int]:
     contig_len = {}
@@ -83,6 +83,19 @@ def normalize_feature_id(fid: str) -> str:
         return fid[len("contig_"):]
     return fid
 
+FEATURE_RE = re.compile(r"^(contig_\d+)_(\d+)$")
+
+def parse_feature_id(fid: str):
+    """
+    fid like: contig_100_20
+    returns: ("contig_100", 20) or (None, None) if not parseable
+    """
+    fid = (fid or "").strip()
+    m = FEATURE_RE.match(fid)
+    if not m:
+        return None, None
+    return m.group(1), int(m.group(2))
+
 
 def tiara_is_bacteria(label) -> bool:
     if label is None:
@@ -112,10 +125,13 @@ def main():
                     help="Flag smORFs within this many bp of contig ends (default: 50).")
 
     # Behavior toggles
-    ap.add_argument("--filter-tiara-bacteria", action="store_true", default=True,
-                    help="Filter TSV rows to tiara_label in {bacteria, prokarya, archaea} (default: ON).")
-    ap.add_argument("--no-filter-tiara-bacteria", dest="filter_tiara_bacteria", action="store_false",
-                    help="Disable tiara_label filtering.")
+    ap.add_argument(
+        "--no-filter-tiara-bacteria",
+        dest="filter_tiara_bacteria",
+        action="store_false",
+        help="Disable tiara_label filtering (default: filter is ON).",
+    )
+    ap.set_defaults(filter_tiara_bacteria=True)
 
     args = ap.parse_args()
 
@@ -162,9 +178,9 @@ def main():
     # Filter to bacteria (tiara_label)
     n0 = len(df)
     if args.filter_tiara_bacteria:
-        lab = df["tiara_label"].fillna("").astype(str).str.lower().str.strip()
-        df = df[lab.str.contains(r"(bacteria|archaea|prokarya|prokaryot)", regex=True)].copy()
-        print(f"[INFO] Filter tiara_label=bacteria/prokarya/archaea: {n0} -> {len(df)} rows")
+        lab = df["tiara_label"].fillna("").astype(str).str.strip().str.lower()
+        df = df[lab == "bacteria"].copy()
+        print(f"[INFO] Filter tiara_label == 'bacteria': {n0} -> {len(df)} rows")
 
     # Ensure output schema exists
     ensure_cols(
@@ -180,41 +196,52 @@ def main():
         ],
     )
 
-    # Map feature_id -> (contig, start, end) from Prodigal GFF
+    # Map feature_id -> (contig, start, end) using contig+ordinal lookup in cds_by_contig
     mapped = 0
     unmapped = 0
 
     start_vals = []
     end_vals = []
-    contig_vals = []  # normalize contig_id for downstream computations
+    host_id_vals = []
+    contig_vals = []
 
     for _, row in df.iterrows():
         fid = row.get("feature_id", "")
         contig_id = row.get("contig_id", "")
 
-        fid_norm = normalize_feature_id(fid)
-        contig_norm = normalize_contig_id(contig_id)
+        contig_key, ord_k = parse_feature_id(fid)
 
-        hit = cds_index.get(fid_norm)
-        if hit is None:
+        if contig_key is None or ord_k is None:
             unmapped += 1
-            # keep empty start/end, but still keep contig norm for step 1 (maybe)
+            contig_vals.append(contig_id)
             start_vals.append("")
             end_vals.append("")
-            contig_vals.append(contig_norm)
-        else:
-            hit_contig_norm, s_i, e_i = hit
-            mapped += 1
-            # prefer GFF contig if available (more trustworthy)
-            contig_vals.append(hit_contig_norm or contig_norm)
-            start_vals.append(str(s_i))
-            end_vals.append(str(e_i))
+            host_id_vals.append("")
+            continue
+
+        cds_list = cds_by_contig.get(contig_key)
+        if not cds_list or ord_k < 1 or ord_k > len(cds_list):
+            unmapped += 1
+            contig_vals.append(contig_key)
+            start_vals.append("")
+            end_vals.append("")
+            host_id_vals.append("")
+            continue
+
+        cds = cds_list[ord_k - 1]  # 1-based -> 0-based
+        mapped += 1
+
+        contig_vals.append(contig_key)
+        start_vals.append(str(cds["start"]))
+        end_vals.append(str(cds["end"]))
+        host_id_vals.append(str(cds.get("id", "")))
 
     df["contig_id"] = contig_vals
     df["start"] = start_vals
     df["end"] = end_vals
+    df["host_cds_id"] = host_id_vals
 
-    print(f"[INFO] feature_id→GFF coord mapping: mapped={mapped}, unmapped={unmapped}")
+    print(f"[INFO] feature_id→GFF coord mapping (by contig+ordinal): mapped={mapped}, unmapped={unmapped}")
 
     # Step 1: contig-edge artifact flagging (now we have start/end for mapped rows)
     print("Applying Step 1: contig-edge artifact flagging...")
