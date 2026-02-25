@@ -235,33 +235,51 @@ Final assemblies and outputs are always written inside the project directory.
 EXAMPLES
 --------
 
-# QC only
+# 1) QC only (default behavior)
 bash workflow/runall.sh
 
-# QC + per-sample MetaFlye
+# 2) QC + per-sample MetaFlye assembly
 bash workflow/runall.sh --qc-and-metaflye
 
-# Global co-assembly
+# 3) Global co-assembly across all FASTQs
 bash workflow/runall.sh --metaflye-only --global
 
-# smORFs on one sample
-bash workflow/runall.sh --smorfs-only --smorfs-sample TS-0500
+# 4) Run smORFs on one assembly
+bash workflow/runall.sh \
+  --smorfs-only \
+  --smorfs-sample TS-0500
 
-# Refinement on one sample
-bash workflow/runall.sh --refine-bacs-only --refine-bacs-sample TS-0500
+# 5) Annotate smORFs with Macrel (direct per-sample mode)
+bash workflow/runall.sh \
+  --macrel-attach-only \
+  --predicted-smorfs results/smorfs/TS-0500/catalog/predicted_smorfs.tsv \
+  --id-col feature_id \
+  --seq-col aa_seq
 
-# smORFs + refinement in one run
+# 6) Run bacterial refinement (Step 1: edge flagging)
+bash workflow/runall.sh \
+  --refine-bacs-only \
+  --refine-bacs-sample TS-0500
+
+# 7) Run smORFs + refinement in one invocation (dependency enforced)
 bash workflow/runall.sh \
   --smorfs-only \
   --smorfs-sample TS-0500 \
   --run-refine-bacs
 
-# Macrel attach mode
+# 8) Run refinement for multiple samples
 bash workflow/runall.sh \
-  --macrel-attach-only \
-  --predicted-smorfs results/smorfs/CAMPINA_GLOBAL/catalog/predicted_smorfs.tsv \
-  --id-col feature_id \
-  --seq-col aa_seq
+  --refine-bacs-only \
+  --refine-bacs-samples metadata/sample_ids.txt
+
+# 9) Full structured workflow (assembly → smORFs → refinement)
+bash workflow/runall.sh \
+  --metaflye-only --global \
+  --run-smorfs \
+  --run-refine-bacs
+
+# 10) Downstream assembly metrics + AMP analysis
+bash workflow/runall.sh --downstream-full
 </pre>
 
 ---
