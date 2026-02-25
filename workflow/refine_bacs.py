@@ -13,14 +13,19 @@ def build_contig_len_dict(fasta_path: str) -> dict[str, int]:
     return contig_len
 
 
-def build_cds_dict_from_gff(gff_path: str):
+def parse_gff_cds_index(gff_path: str):
+    """
+    Build:
+      - cds_by_contig: contig -> list of CDS dicts (for debug / later steps)
+      - cds_index: normalized_feature_id -> (normalized_contig_id, start, end)
+    """
     cds_by_contig = defaultdict(list)
+    cds_index = {}
 
     with open(gff_path) as f:
         for line in f:
-            if line.startswith("#"):
+            if not line or line.startswith("#"):
                 continue
-
             fields = line.rstrip("\n").split("\t")
             if len(fields) < 9:
                 continue
@@ -35,12 +40,17 @@ def build_cds_dict_from_gff(gff_path: str):
             cds_id = ""
             for attr in attributes.split(";"):
                 if attr.startswith("ID="):
-                    cds_id = attr.replace("ID=", "")
+                    cds_id = attr.replace("ID=", "").strip()
                     break
 
+            # Keep the full dict per contig (for later steps)
             cds_by_contig[seqid].append({"start": start_i, "end": end_i, "strand": strand, "id": cds_id})
 
-    return cds_by_contig
+            # Index by normalized CDS id (this is what we'll match feature_id against)
+            if cds_id:
+                cds_index[normalize_feature_id(cds_id)] = (normalize_contig_id(seqid), start_i, end_i)
+
+    return cds_by_contig, cds_index
 
 
 def ensure_cols(df: pd.DataFrame, cols: list[str]) -> None:
@@ -49,14 +59,39 @@ def ensure_cols(df: pd.DataFrame, cols: list[str]) -> None:
             df[c] = ""
 
 
-def pick_col(df: pd.DataFrame, candidates: list[str], label: str) -> str:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    raise SystemExit(
-        f"ERROR: could not find a '{label}' column in TSV. "
-        f"Tried: {candidates}. Available columns: {list(df.columns)}"
-    )
+def normalize_contig_id(x: str) -> str:
+    """
+    Your contigs are like 'contig_1', 'contig_10', etc.
+    We normalize by stripping a leading 'contig_' if present.
+    """
+    x = (x or "").strip()
+    if x.startswith("contig_"):
+        return x[len("contig_"):]
+    return x
+
+
+def normalize_feature_id(fid: str) -> str:
+    """
+    Your TSV feature_id can be like:
+      'contig_1_1'
+    Your GFF CDS ID is often like:
+      '1_1'
+    We normalize by stripping a leading 'contig_' if present.
+    """
+    fid = (fid or "").strip()
+    if fid.startswith("contig_"):
+        return fid[len("contig_"):]
+    return fid
+
+
+def tiara_is_bacteria(label: str) -> bool:
+    """
+    Tiara labels vary a bit. In your README you want tiara_label == "bacteria".
+    In practice Tiara can emit: Bacteria / Archaea / Prokarya / etc.
+    Here we keep it strict-ish but helpful.
+    """
+    s = (label or "").strip().lower()
+    return s in {"bacteria", "prokarya", "archaea"}
 
 
 def main():
@@ -70,12 +105,14 @@ def main():
     ap.add_argument("--cpus", type=int, default=8)
 
     # Step 1 config
-    ap.add_argument("--edge-bp", type=int, default=50, help="Flag smORFs within this many bp of contig ends (default: 50).")
+    ap.add_argument("--edge-bp", type=int, default=50,
+                    help="Flag smORFs within this many bp of contig ends (default: 50).")
 
-    # Optional explicit column names (recommended if your TSV schema is stable)
-    ap.add_argument("--contig-col", default="", help="Contig/seqid column name in TSV (optional).")
-    ap.add_argument("--start-col", default="", help="Start coordinate column name in TSV (optional).")
-    ap.add_argument("--end-col", default="", help="End coordinate column name in TSV (optional).")
+    # Behavior toggles
+    ap.add_argument("--filter-tiara-bacteria", action="store_true", default=True,
+                    help="Filter TSV rows to tiara_label in {bacteria, prokarya, archaea} (default: ON).")
+    ap.add_argument("--no-filter-tiara-bacteria", dest="filter_tiara_bacteria", action="store_false",
+                    help="Disable tiara_label filtering.")
 
     args = ap.parse_args()
 
@@ -84,17 +121,23 @@ def main():
     print("Building initial dictionaries...")
     print("=======================================")
 
-    # Dict 1: contig lengths
-    contig_len = build_contig_len_dict(args.bac_contigs)
-    print(f"[INFO] Contigs loaded: {len(contig_len)}")
-    for i, (k, v) in enumerate(contig_len.items()):
+    # Dict 1: contig lengths (keys are fasta headers, likely 'contig_1', ...)
+    contig_len_raw = build_contig_len_dict(args.bac_contigs)
+    print(f"[INFO] Contigs loaded: {len(contig_len_raw)}")
+
+    for i, (k, v) in enumerate(contig_len_raw.items()):
         print(f"  {k} -> length={v}")
         if i == 4:
             break
 
-    # Dict 2: CDS per contig (not used yet in Step 1, but ok to keep)
-    cds_by_contig = build_cds_dict_from_gff(args.prodigal_gff)
+    # ALSO make a normalized contig len dict keyed by stripped 'contig_' form ('1', '10', ...)
+    contig_len_norm = {normalize_contig_id(k): v for k, v in contig_len_raw.items()}
+
+    # Dict 2: CDS dict + CDS index
+    cds_by_contig, cds_index = parse_gff_cds_index(args.prodigal_gff)
     print(f"[INFO] Contigs with CDS: {len(cds_by_contig)}")
+    print(f"[INFO] CDS indexed by ID: {len(cds_index)}")
+
     for i, (contig, cds_list) in enumerate(cds_by_contig.items()):
         print(f"\n  {contig}: {len(cds_list)} CDS entries")
         for cds in cds_list[:3]:
@@ -103,14 +146,27 @@ def main():
             break
 
     print("\n[OK] Initial dicts built successfully.")
-    print("Applying Step 1: contig-edge artifact flagging...")
+    print("Loading TSV and applying bacteria filter + coordinate mapping...")
 
     df = pd.read_csv(args.input_tsv, sep="\t", dtype=str).copy()
+
+    # Required columns in TSV
+    required = ["feature_id", "contig_id", "tiara_label"]
+    for r in required:
+        if r not in df.columns:
+            raise SystemExit(f"ERROR: required column '{r}' not found in TSV. Columns={list(df.columns)}")
+
+    # Filter to bacteria (tiara_label)
+    n0 = len(df)
+    if args.filter_tiara_bacteria:
+        df = df[df["tiara_label"].map(tiara_is_bacteria)].copy()
+        print(f"[INFO] Filter tiara_label=bacteria/prokarya/archaea: {n0} -> {len(df)} rows")
 
     # Ensure output schema exists
     ensure_cols(
         df,
         [
+            "start", "end",  # we will populate these (even if they didn't exist before)
             "flag_edge", "dist_left", "dist_right",
             "flag_embedded", "flag_overlap_fraction", "host_cds_id",
             "cluster_id", "cluster_size", "cluster_env_count",
@@ -120,33 +176,59 @@ def main():
         ],
     )
 
-    # Resolve columns for Step 1
-    contig_candidates = ["contig", "contig_id", "seqid", "chrom", "scaffold", "contig_name"]
-    start_candidates = ["start", "start_bp", "begin", "begin_bp", "orf_start", "gene_start"]
-    end_candidates = ["end", "end_bp", "stop", "stop_bp", "orf_end", "gene_end"]
+    # Map feature_id -> (contig, start, end) from Prodigal GFF
+    mapped = 0
+    unmapped = 0
 
-    contig_col = args.contig_col or pick_col(df, contig_candidates, "contig/seqid")
-    start_col = args.start_col or pick_col(df, start_candidates, "start")
-    end_col = args.end_col or pick_col(df, end_candidates, "end")
+    start_vals = []
+    end_vals = []
+    contig_vals = []  # normalize contig_id for downstream computations
 
-    print(f"[INFO] Using columns: contig={contig_col}, start={start_col}, end={end_col}, edge_bp={args.edge_bp}")
+    for _, row in df.iterrows():
+        fid = row.get("feature_id", "")
+        contig_id = row.get("contig_id", "")
 
+        fid_norm = normalize_feature_id(fid)
+        contig_norm = normalize_contig_id(contig_id)
+
+        hit = cds_index.get(fid_norm)
+        if hit is None:
+            unmapped += 1
+            # keep empty start/end, but still keep contig norm for step 1 (maybe)
+            start_vals.append("")
+            end_vals.append("")
+            contig_vals.append(contig_norm)
+        else:
+            hit_contig_norm, s_i, e_i = hit
+            mapped += 1
+            # prefer GFF contig if available (more trustworthy)
+            contig_vals.append(hit_contig_norm or contig_norm)
+            start_vals.append(str(s_i))
+            end_vals.append(str(e_i))
+
+    df["contig_id"] = contig_vals
+    df["start"] = start_vals
+    df["end"] = end_vals
+
+    print(f"[INFO] feature_id→GFF coord mapping: mapped={mapped}, unmapped={unmapped}")
+
+    # Step 1: contig-edge artifact flagging (now we have start/end for mapped rows)
+    print("Applying Step 1: contig-edge artifact flagging...")
     missing_contigs = 0
     bad_coords = 0
     flagged = 0
 
-    # Compute
     dist_left_vals = []
     dist_right_vals = []
     flag_edge_vals = []
 
     for _, row in df.iterrows():
-        contig = row.get(contig_col, "")
-        s = row.get(start_col, "")
-        e = row.get(end_col, "")
+        contig_norm = (row.get("contig_id", "") or "").strip()
+        s = (row.get("start", "") or "").strip()
+        e = (row.get("end", "") or "").strip()
 
         try:
-            s_i = int(float(s))  # tolerate "123.0"
+            s_i = int(float(s))
             e_i = int(float(e))
         except Exception:
             bad_coords += 1
@@ -155,7 +237,7 @@ def main():
             flag_edge_vals.append("")
             continue
 
-        L = contig_len.get(contig)
+        L = contig_len_norm.get(contig_norm)
         if L is None:
             missing_contigs += 1
             dist_left_vals.append("")
@@ -177,11 +259,10 @@ def main():
     df["dist_right"] = dist_right_vals
     df["flag_edge"] = flag_edge_vals
 
-    # Keep tier as UNASSESSED for now (Step 7 later)
     df["confidence_tier"] = df["confidence_tier"].replace("", "UNASSESSED")
 
     print(f"[INFO] Rows: {len(df)}")
-    print(f"[INFO] Missing contigs in bac_contigs.fasta: {missing_contigs}")
+    print(f"[INFO] Missing contigs in bac_contigs.fasta (after normalization): {missing_contigs}")
     print(f"[INFO] Rows with non-integer coords: {bad_coords}")
     print(f"[INFO] flag_edge=1: {flagged}")
 
