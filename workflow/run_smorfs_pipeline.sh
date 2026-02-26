@@ -50,6 +50,7 @@ ASSEMBLY_ROOT="${BASE_RESULTS_DIR}/assembly_metaflye"
 MIN_CONTIG_BP=500
 MAX_FUNGAL_PEPTIDE_AA=100
 CPUS=8
+RUN_FUNANNOTATE="${RUN_FUNANNOTATE:-0}"
 
 #table/catalog settings ---
 MAX_SMO_RF_AA="${MAX_SMO_RF_AA:-100}"  # define "smORF" threshold for the table (you already use 100)
@@ -585,19 +586,10 @@ create_nonredundant_catalog() {
     cat "${outdir}/bac/prodigal/bac.prodigal_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" >> "${pooled}"
   fi
 
-  # SmORFinder: best-effort find FASTA outputs inside its folder
-  # (We do not hardcode filenames because versions may differ.)
-  find "${outdir}/bac/smorfinder" -type f \( -iname "*.faa" -o -iname "*.fa" -o -iname "*.fasta" \) \
-    | while read -r f; do
-        # Skip the original contig fasta and other non-peptide files if present:
-        case "$(basename "$f")" in
-          *contigs*.fa* ) continue ;;
-        esac
-        # Heuristic: only append if it looks like protein FASTA (contains '>')
-        if grep -q '^>' "$f"; then
-          cat "$f" >> "${pooled}"
-        fi
-      done
+	# SmORFinder: ONLY final peptides (avoid tmp/ internal prodigal outputs)
+  if [[ -s "${outdir}/bac/smorfinder/smorf_output/smorf_output.faa" ]]; then
+    cat "${outdir}/bac/smorfinder/smorf_output/smorf_output.faa" >> "${pooled}"
+  fi
 
   if [[ -s "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" ]]; then
     cat "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" >> "${pooled}"
@@ -634,6 +626,32 @@ finalize_step2_catalog_and_table() {
   local tiara_map="${outdir}/contigs/classify/tiara.map.tsv"
   local table="${outdir}/catalog/predicted_smorfs.tsv"
 
+	# -----------------------------
+  # SmORFinder: feature_id -> contig_id map (from smorf_output.gff)
+  # -----------------------------
+  local smorf_gff="${outdir}/bac/smorfinder/smorf_output/smorf_output.gff"
+  local smorf_map="${outdir}/bac/smorfinder/smorf_output/feature_to_contig.tsv"
+
+  : > "${smorf_map}"
+  if [[ -s "${smorf_gff}" ]]; then
+    # GFF columns: seqid source type start end score strand phase attributes
+    # We extract:
+    #   - contig_id = column1 (seqid)
+    #   - feature_id from attributes: ID=... (or Name=... as fallback)
+    awk -F'\t' '
+      BEGIN{OFS="\t"}
+      $0 ~ /^#/ {next}
+      NF >= 9 {
+        contig=$1
+        attrs=$9
+        id=""
+        if (match(attrs, /(^|;)ID=([^;]+)/, m)) id=m[2]
+        else if (match(attrs, /(^|;)Name=([^;]+)/, m)) id=m[2]
+        if (id != "") print id, contig
+      }
+    ' "${smorf_gff}" | sort -u > "${smorf_map}"
+  fi
+
   if [[ ! -s "${tiara_map}" ]]; then
     msg "[${sample_id}] NOTE: Tiara map missing/empty at: ${tiara_map} (tiara_label will be blank)"
     tiara_map=""
@@ -650,19 +668,9 @@ finalize_step2_catalog_and_table() {
     cat "${outdir}/bac/prodigal/bac.proteins.faa" >> "${peptides_all}"
   fi
 
-  # 2) SmORFinder: best-effort AA FASTAs
-  if [[ -d "${outdir}/bac/smorfinder" ]]; then
-    find "${outdir}/bac/smorfinder" -type f \( -iname "*.faa" -o -iname "*.fa" -o -iname "*.fasta" \) \
-      | while read -r f; do
-          [[ -s "$f" ]] || continue
-          # skip contigs fasta if it was copied around
-          case "$(basename "$f")" in
-            *contigs*.fa* ) continue ;;
-          esac
-          if grep -q '^>' "$f" && ! is_probably_nt_fasta "$f"; then
-            cat "$f" >> "${peptides_all}"
-          fi
-        done
+  # 2) SmORFinder peptides (ONLY final output; do NOT include tmp/)
+  if [[ -s "${outdir}/bac/smorfinder/smorf_output/smorf_output.faa" ]]; then
+    cat "${outdir}/bac/smorfinder/smorf_output/smorf_output.faa" >> "${peptides_all}"
   fi
 
   # 3) Funannotate proteins (if found earlier, we already made fungi_le_100aa.faa)
@@ -683,15 +691,9 @@ finalize_step2_catalog_and_table() {
     cat "${outdir}/bac/prodigal/bac.cds.fna" >> "${cds_all}"
   fi
 
-  # 2) SmORFinder: best-effort NT FASTAs
-  if [[ -d "${outdir}/bac/smorfinder" ]]; then
-    find "${outdir}/bac/smorfinder" -type f \( -iname "*.fna" -o -iname "*.fa" -o -iname "*.fasta" \) \
-      | while read -r f; do
-          [[ -s "$f" ]] || continue
-          if grep -q '^>' "$f" && is_probably_nt_fasta "$f"; then
-            cat "$f" >> "${cds_all}"
-          fi
-        done
+  # 2) SmORFinder NT CDS (ONLY final output)
+  if [[ -s "${outdir}/bac/smorfinder/smorf_output/smorf_output.ffn" ]]; then
+    cat "${outdir}/bac/smorfinder/smorf_output/smorf_output.ffn" >> "${cds_all}"
   fi
 
   # 3) Funannotate CDS NT: best-effort find under output (varies by version)
@@ -764,6 +766,7 @@ finalize_step2_catalog_and_table() {
     -v S="${sample_id}" \
     -v TIARA="${tiara_map}" \
     -v NTFILE="${tmp_nt}" \
+    -v SMORFMAP="${smorf_map}" \
     -v MAXAA="${MAX_SMO_RF_AA}" '
     '"$(load_tiara_map_to_awk)"'
     BEGIN{
@@ -777,20 +780,41 @@ finalize_step2_catalog_and_table() {
         }
         close(NTFILE);
       }
+      # load SmORFinder feature->contig map
+      if (SMORFMAP != "") {
+        while ((getline line < SMORFMAP) > 0) {
+          if (line ~ /^[[:space:]]*$/) continue
+          split(line, f, "\t")
+          if (f[1] != "" && f[2] != "") smorf2contig[f[1]] = f[2]
+        }
+        close(SMORFMAP)
+      }
     }
     {
       fid=$1; aaseq=$2;
       aa_len=length(aaseq);
       is_smorF=(aa_len<=MAXAA ? "TRUE" : "FALSE");
 
-      contig=fid;
-      sub(/_[0-9]+$/, "", contig);
+      # contig_id logic:
+      # - Prodigal: contig is fid with trailing _<num> stripped
+      # - SmORFinder: contig comes from smorf GFF-derived map (feature_id -> contig_id)
+      contig=""
 
-      tl = (contig in label ? label[contig] : "");
+      if (fid ~ /_[0-9]+$/) {
+        contig=fid
+        sub(/_[0-9]+$/, "", contig)
+      } else if (fid in smorf2contig) {
+        contig = smorf2contig[fid]
+      } else {
+        # fallback: leave blank (prevents wrong tiara_label)
+        contig=""
+      }
+
+      tl = (contig != "" && (contig in label) ? label[contig] : "")
 
       src="mixed";
       if (fid ~ /_[0-9]+$/) src="prodigal";
-      if (fid ~ /^smorf/i) src="smorfinder";
+      if (fid in smorf2contig) src="smorfinder";
       if (fid ~ /FUN_/ || fid ~ /_T[0-9]+$/) src="funannotate";
 
       ntseq = (fid in nt ? nt[fid] : "");
@@ -820,7 +844,11 @@ run_one_sample() {
   classify_contigs_tiara         "${sample_id}" "${asm_fa}" "${outdir}"
   run_prodigal_bac              "${sample_id}" "${outdir}/contigs/bac_contigs.fasta"   "${outdir}"
   run_smorfinder_bac            "${sample_id}" "${outdir}/contigs/bac_contigs.fasta"   "${outdir}"
-  run_funannotate_fungi         "${sample_id}" "${outdir}/contigs/fungi_contigs.fasta" "${outdir}"
+  if [[ "${RUN_FUNANNOTATE}" -eq 1 ]]; then
+    run_funannotate_fungi "${sample_id}" "${outdir}/contigs/fungi_contigs.fasta" "${outdir}"
+  else
+    msg "[${sample_id}] Skipping funannotate (RUN_FUNANNOTATE=0)"
+  fi
   create_nonredundant_catalog   "${sample_id}" "${outdir}"
   finalize_step2_catalog_and_table "${sample_id}" "${outdir}"
 
@@ -904,7 +932,9 @@ need_cmd prodigal
 need_cmd mmseqs
 need_cmd tiara
 need_cmd smorf
-need_cmd funannotate
+if [[ "${RUN_FUNANNOTATE}" -eq 1 ]]; then
+  need_cmd funannotate
+fi
 
 if [[ -n "${SAMPLE}" ]]; then
   run_one_sample "${SAMPLE}"
