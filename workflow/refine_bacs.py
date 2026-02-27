@@ -96,7 +96,6 @@ def parse_feature_id(fid: str):
         return None, None
     return m.group(1), int(m.group(2))
 
-
 def tiara_is_bacteria(label) -> bool:
     if label is None:
         return False
@@ -109,12 +108,114 @@ def tiara_is_bacteria(label) -> bool:
     # accept all prok buckets (depending on how tiara wrote it)
     return any(x in s for x in ("bacteria", "archaea", "prokarya", "prokaryote", "prokaryota"))
 
+def overlap_len(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
+    s = max(a_start, b_start)
+    e = min(a_end, b_end)
+    return max(0, e - s + 1)
+
+def compute_step2_embedded_and_overlap(df: pd.DataFrame, cds_by_contig, min_host_extra_bp: int = 0):
+    """
+    For each smORF row in df (needs contig_id/start/end), compute:
+      - flag_embedded (1/0)
+      - host_cds_id (best host)
+      - flag_overlap_fraction (max overlap with any CDS, as fraction of smORF length)
+    """
+    flag_embedded_vals = []
+    host_cds_id_vals = []
+    overlap_frac_vals = []
+
+    embedded_n = 0
+    checked_n = 0
+    missing_coords = 0
+    missing_contig = 0
+
+    for _, row in df.iterrows():
+        contig = (row.get("contig_id", "") or "").strip()
+        s = (row.get("start", "") or "").strip()
+        e = (row.get("end", "") or "").strip()
+
+        try:
+            s_i = int(float(s))
+            e_i = int(float(e))
+        except Exception:
+            missing_coords += 1
+            flag_embedded_vals.append("")
+            host_cds_id_vals.append("")
+            overlap_frac_vals.append("")
+            continue
+
+        if not contig:
+            missing_contig += 1
+            flag_embedded_vals.append("")
+            host_cds_id_vals.append("")
+            overlap_frac_vals.append("")
+            continue
+
+        cds_list = cds_by_contig.get(contig)
+        if not cds_list:
+            # no CDS on contig
+            flag_embedded_vals.append("0")
+            host_cds_id_vals.append("")
+            overlap_frac_vals.append("0")
+            continue
+
+        checked_n += 1
+        sm_len = e_i - s_i + 1
+
+        # 1) embedded check: any CDS fully contains smORF AND is longer
+        best_host = None
+        best_host_len = None
+
+        # 2) overlap fraction: max overlap with any CDS
+        max_ov = 0
+
+        for cds in cds_list:
+            cs = int(cds["start"])
+            ce = int(cds["end"])
+            cds_len = ce - cs + 1
+
+            ov = overlap_len(s_i, e_i, cs, ce)
+            if ov > max_ov:
+                max_ov = ov
+
+            # containment
+            if cs <= s_i and ce >= e_i:
+                # require host longer by at least min_host_extra_bp
+                if (cds_len - sm_len) >= min_host_extra_bp:
+                    if best_host is None or cds_len < best_host_len:
+                        best_host = cds
+                        best_host_len = cds_len
+
+        if best_host is not None:
+            embedded_n += 1
+            flag_embedded_vals.append("1")
+            host_cds_id_vals.append(str(best_host.get("id", "")))
+        else:
+            flag_embedded_vals.append("0")
+            host_cds_id_vals.append("")
+
+        frac = (max_ov / sm_len) if sm_len > 0 else 0.0
+        # keep a compact representation
+        overlap_frac_vals.append(f"{frac:.3f}")
+
+    return {
+        "flag_embedded": flag_embedded_vals,
+        "host_cds_id_step2": host_cds_id_vals,  # we’ll merge carefully to not clobber your existing host_cds_id unless you want it
+        "flag_overlap_fraction": overlap_frac_vals,
+        "stats": {
+            "checked_rows": checked_n,
+            "embedded_rows": embedded_n,
+            "missing_coords": missing_coords,
+            "missing_contig": missing_contig,
+        }
+    }
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sample", required=True)
     ap.add_argument("--input-tsv", required=True)
-    ap.add_argument("--prodigal-gff", required=True)
+    ap.add_argument("--prodigal-gff", default="",
+                help="Prodigal bacterial genes GFF. If missing/empty, Step2 is skipped.")
     ap.add_argument("--bac-contigs", required=True)
     ap.add_argument("--results-dir", required=True)
     ap.add_argument("--out", required=True)
@@ -123,6 +224,10 @@ def main():
     # Step 1 config
     ap.add_argument("--edge-bp", type=int, default=50,
                     help="Flag smORFs within this many bp of contig ends (default: 50).")
+
+    # Step 2 config
+    ap.add_argument("--min-host-extra-bp", type=int, default=0,
+                    help="Require host CDS to be at least this many bp longer than smORF to call embedded (default: 0).")
 
     # Behavior toggles
     ap.add_argument(
@@ -289,6 +394,32 @@ def main():
     df["dist_left"] = dist_left_vals
     df["dist_right"] = dist_right_vals
     df["flag_edge"] = flag_edge_vals
+
+    # Step 2: embedded-in-longer-CDS (using Prodigal GFF)
+    if args.prodigal_gff and len(cds_by_contig) > 0:
+        print("Applying Step 2: embedded-in-longer-CDS + overlap fraction...")
+        step2 = compute_step2_embedded_and_overlap(
+            df,
+            cds_by_contig=cds_by_contig,
+            min_host_extra_bp=args.min_host_extra_bp
+        )
+
+        df["flag_embedded"] = step2["flag_embedded"]
+        df["flag_overlap_fraction"] = step2["flag_overlap_fraction"]
+
+        # Decide what to do with host_cds_id:
+        # - our current pipeline sets host_cds_id = "the mapped CDS id" (from ordinal mapping)
+        # - Step2 host is "the containing longer CDS"
+        # I recommend keeping both:
+        ensure_cols(df, ["host_cds_id_mapped", "host_cds_id_embedded"])
+        df["host_cds_id_mapped"] = df["host_cds_id"]
+        df["host_cds_id_embedded"] = step2["host_cds_id_step2"]
+
+        st = step2["stats"]
+        print(f"[INFO] Step2 checked_rows={st['checked_rows']}, embedded_rows={st['embedded_rows']}, "
+              f"missing_coords={st['missing_coords']}, missing_contig={st['missing_contig']}")
+    else:
+        print("[INFO] Step2 skipped (no --prodigal-gff provided or no CDS parsed).")
 
     df["confidence_tier"] = df["confidence_tier"].replace("", "UNASSESSED")
 
