@@ -116,7 +116,13 @@ run_one_sample() {
 
   # Prodigal GFF (bacterial)
   local gff="${sample_dir}/bac/prodigal/bac.genes.gff"
-  [[ -f "${gff}" ]] || msg "[${sample_id}] NOTE: Prodigal GFF not found (will still run but embedded checks may be empty): ${gff}"
+  local gff_args=()
+
+  if [[ -f "${gff}" ]]; then
+    gff_args=( --prodigal-gff "${gff}" )
+  else
+    msg "[${sample_id}] WARNING: Prodigal GFF not found; Step2 (embedded) will be skipped: ${gff}"
+  fi
 
   # Contigs fasta (bacterial)
   local bac_fa="${sample_dir}/contigs/bac_contigs.fasta"
@@ -128,7 +134,7 @@ run_one_sample() {
   python workflow/refine_bacs.py \
     --sample "${sample_id}" \
     --input-tsv "${in_tsv}" \
-    --prodigal-gff "${gff}" \
+    "${gff_args[@]}" \
     --bac-contigs "${bac_fa}" \
     --results-dir "${results_dir}" \
     --out "${out_tsv}" \
