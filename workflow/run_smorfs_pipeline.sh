@@ -645,9 +645,12 @@ finalize_step2_catalog_and_table() {
         contig=$1
         attrs=$9
         id=""
-        if (match(attrs, /(^|;)ID=([^;]+)/, m)) id=m[2]
-        else if (match(attrs, /(^|;)Name=([^;]+)/, m)) id=m[2]
-        if (id != "") print id, contig
+        n=split(attrs, a, ";")
+        for(i=1;i<=n;i++){
+          if(a[i] ~ /^ID=/){ sub(/^ID=/,"",a[i]); id=a[i]; break }
+          if(id=="" && a[i] ~ /^Name=/){ sub(/^Name=/,"",a[i]); id=a[i] } # fallback
+        }
+        if(id != "") print id, contig
       }
     ' "${smorf_gff}" | sort -u > "${smorf_map}"
   fi
@@ -724,15 +727,7 @@ finalize_step2_catalog_and_table() {
   printf "sample_id\tsource\tfeature_id\tcontig_id\ttiara_label\taa_len\taa_seq\tnt_len\tnt_seq\tis_smorF_candidate\tamp_pred\tamp_score\themolytic\ttoxic\tnotes\n" \
     > "${table}"
 
-    # Temp files (always define them first; set -u safe)
-    local tmp_aa="" tmp_nt=""
-
-    tmp_aa="$(mktemp)"
-    tmp_nt="$(mktemp)"
-
-    # Cleanup on function return (safe even if empty)
-    trap '[[ -n "${tmp_aa:-}" ]] && rm -f "${tmp_aa}"; [[ -n "${tmp_nt:-}" ]] && rm -f "${tmp_nt}"' RETURN
-    # Load AA/NT sequences into temp files
+    # Temp files
     local tmp_aa tmp_nt
     tmp_aa="$(mktemp)"
     tmp_nt="$(mktemp)"
@@ -799,23 +794,25 @@ finalize_step2_catalog_and_table() {
       # - Prodigal: contig is fid with trailing _<num> stripped
       # - SmORFinder: contig comes from smorf GFF-derived map (feature_id -> contig_id)
       contig=""
-
-      if (fid ~ /_[0-9]+$/) {
+      if (fid in smorf2contig) {
+        contig = smorf2contig[fid]
+      } else if (fid ~ /_[0-9]+$/) {
         contig=fid
         sub(/_[0-9]+$/, "", contig)
-      } else if (fid in smorf2contig) {
-        contig = smorf2contig[fid]
-      } else {
-        # fallback: leave blank (prevents wrong tiara_label)
-        contig=""
       }
 
       tl = (contig != "" && (contig in label) ? label[contig] : "")
 
-      src="mixed";
-      if (fid ~ /_[0-9]+$/) src="prodigal";
-      if (fid in smorf2contig) src="smorfinder";
-      if (fid ~ /FUN_/ || fid ~ /_T[0-9]+$/) src="funannotate";
+      src="mixed"
+
+      # Highest priority: SmORFinder map
+      if (fid in smorf2contig) {
+        src="smorfinder"
+      } else if (fid ~ /_[0-9]+$/) {
+        src="prodigal"
+      } else if (fid ~ /FUN_/ || fid ~ /_T[0-9]+$/) {
+        src="funannotate"
+      }
 
       ntseq = (fid in nt ? nt[fid] : "");
       nt_len = (ntseq=="" ? 0 : length(ntseq));
