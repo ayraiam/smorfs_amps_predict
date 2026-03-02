@@ -125,7 +125,7 @@ run_one_sample() {
   fi
 
   # SmORFinder GFF (needed for smorfinder coordinate mapping + overlap)
-  local smorf_gff="${sample_dir}/bac/smorfinder/smorf_output.gff"
+  local smorf_gff="${sample_dir}/bac/smorfinder/smorf_output/smorf_output.gff"
   local smorf_args=()
 
   if [[ -f "${smorf_gff}" ]]; then
