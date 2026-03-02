@@ -124,6 +124,16 @@ run_one_sample() {
     msg "[${sample_id}] WARNING: Prodigal GFF not found; Step2 (embedded) will be skipped: ${gff}"
   fi
 
+  # SmORFinder GFF (needed for smorfinder coordinate mapping + overlap)
+  local smorf_gff="${sample_dir}/bac/smorfinder/smorf_output.gff"
+  local smorf_args=()
+
+  if [[ -f "${smorf_gff}" ]]; then
+    smorf_args=( --smorfinder-gff "${smorf_gff}" )
+  else
+    msg "[${sample_id}] WARNING: SmORFinder GFF not found; smorfinder mapping/overlap will be skipped: ${smorf_gff}"
+  fi
+
   # Contigs fasta (bacterial)
   local bac_fa="${sample_dir}/contigs/bac_contigs.fasta"
   [[ -f "${bac_fa}" ]] || msg "[${sample_id}] NOTE: bac_contigs.fasta missing: ${bac_fa}"
@@ -135,6 +145,7 @@ run_one_sample() {
     --sample "${sample_id}" \
     --input-tsv "${in_tsv}" \
     "${gff_args[@]}" \
+    "${smorf_args[@]}" \
     --bac-contigs "${bac_fa}" \
     --results-dir "${results_dir}" \
     --out "${out_tsv}" \
