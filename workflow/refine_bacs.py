@@ -14,11 +14,6 @@ def build_contig_len_dict(fasta_path: str) -> dict[str, int]:
 
 
 def parse_gff_cds_index(gff_path: str):
-    """
-    Build:
-      - cds_by_contig: contig -> list of CDS dicts (for debug / later steps)
-      - cds_index: normalized_feature_id -> (normalized_contig_id, start, end)
-    """
     cds_by_contig = defaultdict(list)
     cds_index = {}
 
@@ -37,20 +32,61 @@ def parse_gff_cds_index(gff_path: str):
             start_i = int(start)
             end_i = int(end)
 
-            cds_id = ""
+            # parse attributes into a dict
+            ad = {}
             for attr in attributes.split(";"):
-                if attr.startswith("ID="):
-                    cds_id = attr.replace("ID=", "").strip()
-                    break
+                if "=" in attr:
+                    k, v = attr.split("=", 1)
+                    ad[k.strip()] = v.strip()
 
-            # Keep the full dict per contig (for later steps)
-            cds_by_contig[seqid].append({"start": start_i, "end": end_i, "strand": strand, "id": cds_id})
+            cds_id = ad.get("ID", "").strip()
+            cds_name = ad.get("Name", "").strip()
+            cds_locus = ad.get("locus_tag", "").strip()
 
-            # Index by normalized CDS id (this is what we'll match feature_id against)
-            if cds_id:
-                cds_index[normalize_feature_id(cds_id)] = (normalize_contig_id(seqid), start_i, end_i)
+            seqid_norm = normalize_contig_id(seqid)
+            cds_by_contig[seqid_norm].append({"start": start_i, "end": end_i, "strand": strand, "id": cds_id})
+
+            # index multiple keys -> same coords
+            for key in (cds_id, cds_name, cds_locus):
+                if key:
+                    cds_index[key] = (seqid_norm, start_i, end_i)
 
     return cds_by_contig, cds_index
+
+def parse_smorfinder_gff_index(smorf_gff_path: str):
+    smorf_by_contig = defaultdict(list)
+    smorf_index = {}
+
+    if not smorf_gff_path:
+        return smorf_by_contig, smorf_index
+
+    with open(smorf_gff_path) as f:
+        for line in f:
+            if not line or line.startswith("#"):
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 9:
+                continue
+
+            seqid, source, feature_type, start, end, score, strand, phase, attributes = fields
+
+            # DO NOT filter by feature_type; SmORFinder may not use "CDS"
+            fid = ""
+            for attr in attributes.split(";"):
+                if attr.startswith("ID="):
+                    fid = attr.replace("ID=", "").strip()
+                    break
+            if not fid:
+                continue
+
+            s_i = int(start)
+            e_i = int(end)
+
+            seqid_norm = normalize_contig_id(seqid)
+            smorf_by_contig[seqid_norm].append({"id": fid, "start": s_i, "end": e_i, "strand": strand})
+            smorf_index[fid] = (seqid_norm, s_i, e_i, strand)
+
+    return smorf_by_contig, smorf_index
 
 
 def ensure_cols(df: pd.DataFrame, cols: list[str]) -> None:
@@ -112,6 +148,35 @@ def overlap_len(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
     s = max(a_start, b_start)
     e = min(a_end, b_end)
     return max(0, e - s + 1)
+
+def compute_overlaps_all_hosts(sm_start: int, sm_end: int, cds_list: list[dict]):
+    """
+    Returns:
+      host_ids: list[str]
+      fracs: list[float]   # overlap fraction per host CDS (over smORF length)
+      embedded_hosts: list[str]  # hosts that fully contain smORF
+    """
+    sm_len = sm_end - sm_start + 1
+    if sm_len <= 0:
+        return [], [], []
+
+    host_ids = []
+    fracs = []
+    embedded_hosts = []
+
+    for cds in cds_list:
+        cs, ce = int(cds["start"]), int(cds["end"])
+        ov = overlap_len(sm_start, sm_end, cs, ce)
+        if ov <= 0:
+            continue
+        frac = ov / sm_len
+        host_ids.append(str(cds.get("id", "")))
+        fracs.append(frac)
+
+        if cs <= sm_start and ce >= sm_end:
+            embedded_hosts.append(str(cds.get("id", "")))
+
+    return host_ids, fracs, embedded_hosts
 
 def compute_step2_embedded_and_overlap(df: pd.DataFrame, cds_by_contig, min_host_extra_bp: int = 0):
     """
@@ -236,6 +301,12 @@ def main():
         action="store_false",
         help="Disable tiara_label filtering (default: filter is ON).",
     )
+
+    ap.add_argument(
+    "--smorfinder-gff", default="",
+    help="SmORFinder GFF (smorf_output.gff). Used to map smorfinder feature_id -> contig/start/end."
+    )
+
     ap.set_defaults(filter_tiara_bacteria=True)
 
     args = ap.parse_args()
@@ -269,13 +340,24 @@ def main():
         if i == 2:
             break
 
+    smorf_by_contig, smorf_index = parse_smorfinder_gff_index(args.smorfinder_gff)
+    print(f"[INFO] SmORFinder contigs with smORFs: {len(smorf_by_contig)}")
+    print(f"[INFO] SmORFinder features indexed: {len(smorf_index)}")
+
+    for i, (contig, sm_list) in enumerate(smorf_by_contig.items()):
+        print(f"\n  {contig}: {len(sm_list)} smORFs")
+        for sm in sm_list[:3]:
+             print(f"    {sm}")
+        if i == 2:
+            break
+
     print("\n[OK] Initial dicts built successfully.")
     print("Loading TSV and applying bacteria filter + coordinate mapping...")
 
     df = pd.read_csv(args.input_tsv, sep="\t", dtype=str).copy()
 
     # Required columns in TSV
-    required = ["feature_id", "contig_id", "tiara_label"]
+    required = ["source", "feature_id", "contig_id", "tiara_label"]
     for r in required:
         if r not in df.columns:
             raise SystemExit(f"ERROR: required column '{r}' not found in TSV. Columns={list(df.columns)}")
@@ -283,9 +365,8 @@ def main():
     # Filter to bacteria (tiara_label)
     n0 = len(df)
     if args.filter_tiara_bacteria:
-        lab = df["tiara_label"].fillna("").astype(str).str.strip().str.lower()
-        df = df[lab == "bacteria"].copy()
-        print(f"[INFO] Filter tiara_label == 'bacteria': {n0} -> {len(df)} rows")
+        df = df[df["tiara_label"].apply(tiara_is_bacteria)].copy()
+        print(f"[INFO] Filter tiara_label == 'bacteria/archaea/prokarya': {n0} -> {len(df)} rows")
 
     # Ensure output schema exists
     ensure_cols(
@@ -311,42 +392,121 @@ def main():
     contig_vals = []
 
     for _, row in df.iterrows():
-        fid = row.get("feature_id", "")
-        contig_id = row.get("contig_id", "")
+        src = (row.get("source", "") or "").strip().lower()
+        fid = (row.get("feature_id", "") or "").strip()
 
-        contig_key, ord_k = parse_feature_id(fid)
+        # default
+        contig_vals.append(row.get("contig_id", "") or "")
+        start_vals.append("")
+        end_vals.append("")
+        host_id_vals.append("")
 
-        if contig_key is None or ord_k is None:
+        if not fid:
             unmapped += 1
-            contig_vals.append(contig_id)
-            start_vals.append("")
-            end_vals.append("")
-            host_id_vals.append("")
             continue
 
-        cds_list = cds_by_contig.get(contig_key)
-        if not cds_list or ord_k < 1 or ord_k > len(cds_list):
-            unmapped += 1
-            contig_vals.append(contig_key)
-            start_vals.append("")
-            end_vals.append("")
-            host_id_vals.append("")
+        if src == "smorfinder":
+            hit = smorf_index.get(fid)
+            if not hit:
+                unmapped += 1
+                continue
+            contig, s_i, e_i, strand = hit
+            contig_vals[-1] = contig
+            start_vals[-1] = str(s_i)
+            end_vals[-1] = str(e_i)
+            # host_id_vals stays blank here; hosts come from overlap step
+            mapped += 1
             continue
 
-        cds = cds_list[ord_k - 1]  # 1-based -> 0-based
-        mapped += 1
+        if src == "prodigal":
 
-        contig_vals.append(contig_key)
-        start_vals.append(str(cds["start"]))
-        end_vals.append(str(cds["end"]))
-        host_id_vals.append(str(cds.get("id", "")))
+            # 1) First try direct lookup by feature_id (works for BYUMGR_* IDs)
+            hit = cds_index.get(fid)
+            if hit:
+                contig_norm, s_i, e_i = hit
+                contig_vals[-1] = contig_norm
+                start_vals[-1] = str(s_i)
+                end_vals[-1] = str(e_i)
+                host_id_vals[-1] = fid
+                mapped += 1
+                continue
+
+            # 2) Fallback: contig_###_ordinal style (if ever present)
+            contig_key, ord_k = parse_feature_id(fid)
+            if contig_key is None or ord_k is None:
+                unmapped += 1
+                continue
+
+            contig_norm = normalize_contig_id(contig_key)
+            cds_list = cds_by_contig.get(contig_norm)
+            if not cds_list or ord_k < 1 or ord_k > len(cds_list):
+                unmapped += 1
+                continue
+
+            cds = cds_list[ord_k - 1]
+            contig_vals[-1] = contig_norm
+            start_vals[-1] = str(cds["start"])
+            end_vals[-1] = str(cds["end"])
+            host_id_vals[-1] = str(cds.get("id", ""))
+            mapped += 1
+            continue
+
+        # for "mixed" (or anything else), we intentionally do NOT assign coords
+        unmapped += 1
 
     df["contig_id"] = contig_vals
     df["start"] = start_vals
     df["end"] = end_vals
     df["host_cds_id"] = host_id_vals
 
-    print(f"[INFO] feature_id→GFF coord mapping (by contig+ordinal): mapped={mapped}, unmapped={unmapped}")
+    print(f"[INFO] source-aware coord mapping: mapped={mapped}, unmapped={unmapped}")
+
+    # ---------------------------------------------------------
+    # SmORFinder-only overlap vs Prodigal CDS
+    # Write results into EXISTING columns:
+    #   - host_cds_id            (comma list of overlapping CDS IDs)
+    #   - flag_overlap_fraction  (comma list of overlap fractions aligned to host_cds_id)
+    #   - flag_embedded          (1 if ANY host fully contains smORF else 0)
+    #   - host_cds_id_embedded   (comma list of host CDS IDs that fully contain smORF)
+    # ---------------------------------------------------------
+    ensure_cols(df, ["host_cds_id_embedded"])  # this is in your schema list
+    # (host_cds_id, flag_overlap_fraction, flag_embedded already exist in your ensure_cols earlier)
+
+    smorf_mask = df["source"].fillna("").astype(str).str.lower().eq("smorfinder")
+
+    # Default-fill ONLY smorfinder rows; leave prodigal/mixed untouched
+    df.loc[smorf_mask, "host_cds_id"] = ""
+    df.loc[smorf_mask, "flag_overlap_fraction"] = ""
+    df.loc[smorf_mask, "flag_embedded"] = ""
+    df.loc[smorf_mask, "host_cds_id_embedded"] = ""
+
+    # Iterate only smorfinder rows
+    for idx, row in df.loc[smorf_mask].iterrows():
+        contig = (row.get("contig_id", "") or "").strip()
+        try:
+            s_i = int(float((row.get("start", "") or "").strip()))
+            e_i = int(float((row.get("end", "") or "").strip()))
+        except Exception:
+            # keep blanks if coords missing
+            continue
+
+        cds_list = cds_by_contig.get(contig, [])
+        if not cds_list:
+            # No Prodigal CDS on contig => embedded=0, overlap empty
+            df.at[idx, "flag_embedded"] = "0"
+            df.at[idx, "host_cds_id"] = ""
+            df.at[idx, "flag_overlap_fraction"] = ""
+            df.at[idx, "host_cds_id_embedded"] = ""
+            continue
+
+        host_ids, fracs, embedded_hosts = compute_overlaps_all_hosts(s_i, e_i, cds_list)
+
+        # Write lists as comma-separated strings (aligned)
+        # If you prefer semicolon, just change "," to ";"
+        df.at[idx, "host_cds_id"] = ",".join([h for h in host_ids if h])
+        df.at[idx, "flag_overlap_fraction"] = ",".join([f"{x:.3f}" for x in fracs])
+        df.at[idx, "host_cds_id_embedded"] = ",".join([h for h in embedded_hosts if h])
+        df.at[idx, "flag_embedded"] = "1" if len(embedded_hosts) > 0 else "0"
 
     # Step 1: contig-edge artifact flagging (now we have start/end for mapped rows)
     print("Applying Step 1: contig-edge artifact flagging...")
@@ -373,7 +533,7 @@ def main():
             flag_edge_vals.append("")
             continue
 
-        L = contig_len_raw.get(contig_norm)
+        L = contig_len_norm.get(contig_norm)
         if L is None:
             missing_contigs += 1
             dist_left_vals.append("")
@@ -395,31 +555,26 @@ def main():
     df["dist_right"] = dist_right_vals
     df["flag_edge"] = flag_edge_vals
 
-    # Step 2: embedded-in-longer-CDS (using Prodigal GFF)
-    if args.prodigal_gff and len(cds_by_contig) > 0:
-        print("Applying Step 2: embedded-in-longer-CDS + overlap fraction...")
+    # Step 2: embedded-in-longer-CDS (OPTIONAL, but DO NOT overwrite smorfinder)
+    prodigal_mask = df["source"].fillna("").astype(str).str.lower().eq("prodigal")
+
+    if args.prodigal_gff and len(cds_by_contig) > 0 and prodigal_mask.any():
+        print("Applying Step 2 (prodigal-only): embedded-in-longer-CDS + overlap fraction...")
+
         step2 = compute_step2_embedded_and_overlap(
-            df,
+            df.loc[prodigal_mask].copy(),
             cds_by_contig=cds_by_contig,
             min_host_extra_bp=args.min_host_extra_bp
         )
 
-        df["flag_embedded"] = step2["flag_embedded"]
-        df["flag_overlap_fraction"] = step2["flag_overlap_fraction"]
+        df.loc[prodigal_mask, "flag_embedded"] = step2["flag_embedded"]
+        df.loc[prodigal_mask, "flag_overlap_fraction"] = step2["flag_overlap_fraction"]
 
-        # Decide what to do with host_cds_id:
-        # - our current pipeline sets host_cds_id = "the mapped CDS id" (from ordinal mapping)
-        # - Step2 host is "the containing longer CDS"
-        # I recommend keeping both:
         ensure_cols(df, ["host_cds_id_mapped", "host_cds_id_embedded"])
-        df["host_cds_id_mapped"] = df["host_cds_id"]
-        df["host_cds_id_embedded"] = step2["host_cds_id_step2"]
-
-        st = step2["stats"]
-        print(f"[INFO] Step2 checked_rows={st['checked_rows']}, embedded_rows={st['embedded_rows']}, "
-              f"missing_coords={st['missing_coords']}, missing_contig={st['missing_contig']}")
+        df.loc[prodigal_mask, "host_cds_id_mapped"] = df.loc[prodigal_mask, "host_cds_id"]
+        df.loc[prodigal_mask, "host_cds_id_embedded"] = step2["host_cds_id_step2"]
     else:
-        print("[INFO] Step2 skipped (no --prodigal-gff provided or no CDS parsed).")
+        print("[INFO] Step2 skipped (no prodigal rows or no CDS parsed).")
 
     df["confidence_tier"] = df["confidence_tier"].replace("", "UNASSESSED")
 
