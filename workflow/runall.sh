@@ -457,6 +457,7 @@ if [[ "${RUN_ASSEMBLY}" -eq 1 && "${RUN_METAFlyE}" -eq 1 ]]; then
 fi
 
 SMORFS_JOB_ID=""
+MM_JOB_ID=""
 
 if [[ "${RUN_SMORFS}" -eq 1 ]]; then
   echo ">>> Submitting smORFs job (assumes MetaFlye assemblies already exist) ..."
@@ -543,8 +544,10 @@ if [[ "${RUN_REFINE_BACS}" -eq 1 ]]; then
   # SMORFS_JOB_ID will be just the numeric id if you applied the awk fix.
   REFINE_DEP=()
   if [[ -n "${SMORFS_JOB_ID:-}" ]]; then
-    REFINE_DEP=( --dependency="afterok:${SMORFS_JOB_ID}" )
-    echo ">>> refine will wait for smORFs job: ${SMORFS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+    REFINE_DEP+=( --dependency="afterok:${SMORFS_JOB_ID}" )
+  fi
+  if [[ -n "${MM_JOB_ID:-}" ]]; then
+    REFINE_DEP+=( --dependency="afterok:${MM_JOB_ID}" )
   fi
 
   REFINE_JOB_ID=$(sbatch \
@@ -635,4 +638,3 @@ echo "  $CMD_LOG"
 echo "MetaFlye submit logs:"
 echo "  $MF_OUT_LOG"
 echo "  $MF_ERR_LOG"
-
