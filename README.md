@@ -125,6 +125,8 @@ Current refinement framework includes fields for:
   flag_cross_environment
   flag_too_short
   confidence_tier
+  cluster_id refers to the representative ID from MMseqs clustering.
+  member IDs are environment-prefixed (ENV|feature_id).
 
 Refinement is designed to classify predictions into confidence tiers
 based on genomic context and recurrence, enabling structured downstream filtering.
@@ -138,6 +140,89 @@ Refinement is independent and can be run:
 
 If refinement is launched in the same run as smORFs,
 Slurm dependency is automatically enforced (afterok).
+</pre>
+
+<pre>
+GLOBAL CLUSTERING & RECURRENCE ANALYSIS
+----------------------------------------
+
+The pipeline supports global peptide clustering across all environments
+to identify structurally recurrent smORFs.
+
+Clustering workflow:
+
+  1) Concatenate peptides_all.faa from:
+       RIPARIA_GLOBAL
+       PENEIRA_GLOBAL
+       CAMPINA_GLOBAL
+       UNIFORME_GLOBAL
+
+  2) Prefix FASTA headers with environment label:
+       ENV|feature_id
+
+  3) Cluster with MMseqs2:
+       --min-seq-id 0.95
+       -c 0.8
+       --cov-mode 1
+
+  4) Generate:
+       clusters_pairs.tsv     (rep <tab> member)
+       cluster_map.tsv        (member_id <tab> representative_id)
+
+Refinement Step 3 integrates this information into each smORF catalog:
+
+  cluster_id              Representative sequence ID
+  cluster_size            Total members in cluster
+  cluster_env_count       Number of distinct environments
+  flag_cluster_recurrent  cluster_size ≥ 2
+  flag_cross_environment  cluster_env_count ≥ 2
+
+This enables:
+
+  • Detection of globally conserved smORFs
+  • Identification of cross-ecosystem recurrence
+  • Separation of singletons vs shared features
+  • Structured novelty assessment
+
+Clustering can be run independently:
+
+  bash workflow/runall.sh --mmseqs-global-only
+
+Cluster-only refinement mode:
+
+  bash workflow/runall.sh \
+    --refine-bacs-only \
+    --cluster-only \
+    --refine-bacs-sample PENEIRA_GLOBAL
+</pre>
+
+<pre>
+REFINEMENT LOGIC OVERVIEW
+-------------------------
+
+Refinement proceeds in structured layers:
+
+Step 1 — Contig-edge artifact detection
+  • flag_edge
+  • dist_left / dist_right
+
+Step 2 — Embedded-in-longer-CDS analysis
+  • flag_embedded
+  • host_cds_id
+  • flag_overlap_fraction
+
+Step 3 — Global structural recurrence
+  • cluster_id
+  • cluster_size
+  • cluster_env_count
+  • flag_cluster_recurrent
+  • flag_cross_environment
+
+These layers allow progressive filtering:
+
+  Structural artifact → Genomic overlap → Ecological recurrence
+
+Each step is independently runnable and does not require re-execution of prior stages.
 </pre>
 
 ---
@@ -232,53 +317,98 @@ Final assemblies and outputs are always written inside the project directory.
 ---
 
 <pre>
-EXAMPLES
---------
+EXECUTION EXAMPLES
+------------------
 
-# 1) QC only (default behavior)
+QC & ASSEMBLY
+-------------
+
+# 1) QC only (default; read-only)
 bash workflow/runall.sh
 
-# 2) QC + per-sample MetaFlye assembly
+# 2) QC + per-sample MetaFlye assemblies
 bash workflow/runall.sh --qc-and-metaflye
 
-# 3) Global co-assembly across all FASTQs
+# 3) Global co-assembly across all libraries
 bash workflow/runall.sh --metaflye-only --global
 
-# 4) Run smORFs on one assembly
+# 4) Structured global assembly → smORFs → refinement
+bash workflow/runall.sh \
+  --metaflye-only --global \
+  --run-smorfs \
+  --run-refine-bacs
+
+
+smORF DISCOVERY
+---------------
+
+# 5) Run smORFs for one assembly
 bash workflow/runall.sh \
   --smorfs-only \
   --smorfs-sample TS-0500
 
-# 5) Annotate smORFs with Macrel (direct per-sample mode)
+# 6) Run smORFs for multiple assemblies
+bash workflow/runall.sh \
+  --smorfs-only \
+  --smorfs-samples metadata/sample_ids.txt
+
+
+AMP ANNOTATION (Macrel)
+-----------------------
+
+# 7) Annotate a predicted smORF catalog with Macrel (ID-safe merge)
 bash workflow/runall.sh \
   --macrel-attach-only \
   --predicted-smorfs results/smorfs/TS-0500/catalog/predicted_smorfs.tsv \
   --id-col feature_id \
   --seq-col aa_seq
 
-# 6) Run bacterial refinement (Step 1: edge flagging)
+Macrel fields added:
+  amp_pred, amp_prob
+  hemo_pred, hemo_prob
+  macrel_class
+
+
+GLOBAL CLUSTERING (Recurrence Analysis)
+---------------------------------------
+
+# 8) Build global peptide catalog and cluster across ecosystems
+bash workflow/runall.sh \
+  --mmseqs-global-only \
+  --cpus 16
+
+Outputs:
+  results/smorfs/GLOBAL/catalog/peptides_all_global.faa
+  results/smorfs/GLOBAL/mmseqs/cluster_map.tsv
+
+
+BACTERIAL REFINEMENT
+--------------------
+
+# 9) Full genomic-context refinement (edge + embedded + recurrence)
 bash workflow/runall.sh \
   --refine-bacs-only \
-  --refine-bacs-sample TS-0500
+  --refine-bacs-sample PENEIRA_GLOBAL
 
-# 7) Run smORFs + refinement in one invocation (dependency enforced)
+# 10) Attach recurrence statistics only (Step 3)
 bash workflow/runall.sh \
-  --smorfs-only \
-  --smorfs-sample TS-0500 \
-  --run-refine-bacs
+  --refine-bacs-only \
+  --cluster-only \
+  --refine-bacs-sample PENEIRA_GLOBAL
 
-# 8) Run refinement for multiple samples
+# 11) Run refinement for multiple ecosystems
 bash workflow/runall.sh \
   --refine-bacs-only \
   --refine-bacs-samples metadata/sample_ids.txt
 
-# 9) Full structured workflow (assembly → smORFs → refinement)
-bash workflow/runall.sh \
-  --metaflye-only --global \
-  --run-smorfs \
-  --run-refine-bacs
 
-# 10) Downstream assembly metrics + AMP analysis
+DOWNSTREAM ANALYSIS
+-------------------
+
+# 12) Parse Flye logs + generate assembly metrics plots
+bash workflow/runall.sh --downstream-only
+
+# 13) Full downstream (metrics + AMP utilities)
 bash workflow/runall.sh --downstream-full
 </pre>
 
