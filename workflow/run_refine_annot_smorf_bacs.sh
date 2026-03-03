@@ -82,6 +82,7 @@ create_env() {
     gffutils \
     pyranges \
     intervaltree \
+    mmseqs2 \
     seqkit
 
   msg "Env created: ${ENV_PREFIX}"
