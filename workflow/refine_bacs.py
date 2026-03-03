@@ -372,6 +372,12 @@ def main():
     ap.add_argument("--cluster-map", default="", help="MMseqs cluster_map.tsv (member_id<TAB>rep_id).")
     ap.add_argument("--env-label", default="", help="Environment label (e.g., RIPARIA). Used to build member_id=ENV|feature_id.")
 
+    ap.add_argument(
+        "--cluster-only",
+        action="store_true",
+        help="Only attach MMseqs cluster stats (Step 3) and write output; skip coord mapping + Steps 1/2.",
+    )
+
     ap.set_defaults(filter_tiara_bacteria=True)
 
     args = ap.parse_args()
@@ -436,6 +442,12 @@ def main():
     if args.cluster_map:
         env_label = args.env_label.strip() or None
         df = attach_cluster_stats(df, args.cluster_map, env_label=env_label)
+
+    # If only Step 3 is requested, stop here
+    if args.cluster_only:
+        df.to_csv(args.out, sep="\t", index=False)
+        print(f"[OK] (cluster-only) wrote: {args.out}")
+        raise SystemExit(0)
 
     # Ensure output schema exists
     ensure_cols(
