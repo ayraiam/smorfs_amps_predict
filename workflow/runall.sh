@@ -86,6 +86,11 @@ BATCH_ID="batch1"
 GLOBAL_ASSEMBLY=0
 GLOBAL_ID="GLOBAL"
 
+RUN_MMSEQS_GLOBAL=0
+MIN_SEQ_ID="0.95"
+MMSEQS_COV="0.8"
+MMSEQS_COV_MODE="1"
+
 usage() {
   echo "Usage: bash workflow/runall.sh [options]"
   echo
@@ -137,6 +142,12 @@ usage() {
   echo "  --smorfs-create-env   Create smORFs conda env and exit"
   echo "  --smorfs-env STR      Conda env name for smORFs pipeline (default: smorfs_amps_env)"
   echo "  --funannotate-db PATH Funannotate DB dir (export FUNANNOTATE_DB_DIR)"
+  echo "Clustering (MMseqs2):"
+  echo "  --mmseqs-global-only      Build global peptides FASTA + run MMseqs2 clustering"
+  echo "  --run-mmseqs-global       Run MMseqs2 global clustering in addition to selected steps"
+  echo "  --min-seq-id FLOAT        MMseqs min identity (default: 0.95)"
+  echo "  --mmseqs-cov FLOAT        MMseqs coverage -c (default: 0.8)"
+  echo "  --mmseqs-cov-mode INT     MMseqs cov-mode (default: 1)"
   echo "Refine (bacteria):"
   echo "--refine-bacs-only         Submit refine job only (no QC, no assembly, no smORFs)"
   echo "--run-refine-bacs          Run refine stage in addition to selected steps"
@@ -267,22 +278,37 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
 			# ---- refine bacs options ----
-	    --refine-bacs-only)
-	      RUN_QC=0
-	      RUN_ASSEMBLY=0
-	      RUN_METAFlyE=0
-	      RUN_SMORFS=0
-	      RUN_DOWNSTREAM=0
-	      RUN_REFINE_BACS=1
-	      shift 1
-	      ;;
+      --refine-bacs-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=1
+        shift 1
+        ;;
 
-	    --run-refine-bacs) RUN_REFINE_BACS=1; shift 1 ;;
-	    --refine-bacs-sample) REFINE_BACS_SAMPLE_ID="$2"; shift 2 ;;
-	    --refine-bacs-samples) REFINE_BACS_SAMPLES_FILE="$2"; shift 2 ;;
-	    --refine-bacs-create-env) REFINE_BACS_CREATE_ENV=1; shift 1 ;;
-	    --refine-bacs-env) REFINE_BACS_ENV="$2"; shift 2 ;;
-	    --refine-bacs-input-tsv) REFINE_BACS_INPUT_TSV="$2"; shift 2 ;;
+      --run-refine-bacs) RUN_REFINE_BACS=1; shift 1 ;;
+      --refine-bacs-sample) REFINE_BACS_SAMPLE_ID="$2"; shift 2 ;;
+      --refine-bacs-samples) REFINE_BACS_SAMPLES_FILE="$2"; shift 2 ;;
+      --refine-bacs-create-env) REFINE_BACS_CREATE_ENV=1; shift 1 ;;
+      --refine-bacs-env) REFINE_BACS_ENV="$2"; shift 2 ;;
+      --refine-bacs-input-tsv) REFINE_BACS_INPUT_TSV="$2"; shift 2 ;;
+
+      --mmseqs-global-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_MMSEQS_GLOBAL=1
+        shift 1
+        ;;
+      --run-mmseqs-global) RUN_MMSEQS_GLOBAL=1; shift 1 ;;
+      --min-seq-id) MIN_SEQ_ID="$2"; shift 2 ;;
+      --mmseqs-cov) MMSEQS_COV="$2"; shift 2 ;;
+      --mmseqs-cov-mode) MMSEQS_COV_MODE="$2"; shift 2 ;;
 
     *) echo "Unknown argument: $1"; usage ;;
   esac
@@ -463,6 +489,35 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
   )
 
   echo ">>> smORFs submitted as job ${SMORFS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+fi
+
+if [[ "${RUN_MMSEQS_GLOBAL}" -eq 1 ]]; then
+  MM_OUT_LOG="logs/mmseqs_global_${TS}.out"
+  MM_ERR_LOG="logs/mmseqs_global_${TS}.err"
+
+  MM_DEP=()
+  if [[ -n "${SMORFS_JOB_ID:-}" ]]; then
+    MM_DEP=( --dependency="afterok:${SMORFS_JOB_ID}" )
+  fi
+
+  MM_JOB_ID=$(sbatch \
+    "${MM_DEP[@]}" \
+    --partition="${PARTITION}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="${CPUS}" \
+    --mem="${MEM}" \
+    --time="${TIME}" \
+    --chdir="${WDIR}" \
+    --export=ALL,RESULTS_DIR="${RESULTS_DIR}",THREADS="${CPUS}",MIN_SEQ_ID="${MIN_SEQ_ID}",COV="${MMSEQS_COV}",COV_MODE="${MMSEQS_COV_MODE}" \
+    --output="${MM_OUT_LOG}" \
+    --error="${MM_ERR_LOG}" \
+    workflow/mmseqs_global_job.sh \
+    | awk '{print $NF}'
+  )
+
+  echo ">>> MMseqs GLOBAL clustering submitted as job ${MM_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  echo ">>> MMseqs logs: ${MM_OUT_LOG} / ${MM_ERR_LOG}" | tee -a "$OUT_LOG" "$CMD_LOG"
 fi
 
 if [[ "${RUN_REFINE_BACS}" -eq 1 ]]; then
