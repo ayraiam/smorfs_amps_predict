@@ -94,7 +94,6 @@ def ensure_cols(df: pd.DataFrame, cols: list[str]) -> None:
         if c not in df.columns:
             df[c] = ""
 
-
 def normalize_contig_id(x: str) -> str:
     """
     Your contigs are like 'contig_1', 'contig_10', etc.
