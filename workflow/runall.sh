@@ -55,6 +55,7 @@ REFINE_BACS_SAMPLES_FILE="metadata/sample_ids.txt"   # default list (same style)
 REFINE_BACS_SAMPLE_ID=""                              # optional single sample
 REFINE_BACS_INPUT_TSV=""                              # optional override (advanced)
 REFINE_BACS_JOB_ID=""
+REFINE_CLUSTER_ONLY=0
 
 # Step control (default: run QC; MetaFlye only if requested)
 RUN_QC=1
@@ -294,6 +295,7 @@ while [[ $# -gt 0 ]]; do
       --refine-bacs-create-env) REFINE_BACS_CREATE_ENV=1; shift 1 ;;
       --refine-bacs-env) REFINE_BACS_ENV="$2"; shift 2 ;;
       --refine-bacs-input-tsv) REFINE_BACS_INPUT_TSV="$2"; shift 2 ;;
+      --cluster-only) REFINE_CLUSTER_ONLY=1; shift 1 ;;
 
       --mmseqs-global-only)
         RUN_QC=0
@@ -525,6 +527,7 @@ if [[ "${RUN_REFINE_BACS}" -eq 1 ]]; then
   echo ">>> Submitting refine_annot_smorf_bacs job ..." | tee -a "$OUT_LOG" "$CMD_LOG"
 
   REFINE_RUN_ARGS="--samples-file ${REFINE_BACS_SAMPLES_FILE}"
+
   if [[ -n "${REFINE_BACS_SAMPLE_ID}" ]]; then
     REFINE_RUN_ARGS="--sample ${REFINE_BACS_SAMPLE_ID}"
     echo ">>> refine will run for ONE SampleID only: ${REFINE_BACS_SAMPLE_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
@@ -532,12 +535,18 @@ if [[ "${RUN_REFINE_BACS}" -eq 1 ]]; then
     echo ">>> refine will run for SampleIDs in: ${REFINE_BACS_SAMPLES_FILE}" | tee -a "$OUT_LOG" "$CMD_LOG"
   fi
 
+  # Append cluster-only flag if requested (applies to both modes)
+  if [[ "${REFINE_CLUSTER_ONLY}" -eq 1 ]]; then
+    REFINE_RUN_ARGS="${REFINE_RUN_ARGS} --cluster-only"
+    echo ">>> refine running in CLUSTER-ONLY mode (Step 3 only)" | tee -a "$OUT_LOG" "$CMD_LOG"
+  fi
+
   # Optional override TSV (advanced)
   if [[ -n "${REFINE_BACS_INPUT_TSV}" ]]; then
     REFINE_RUN_ARGS="${REFINE_RUN_ARGS} --input-tsv ${REFINE_BACS_INPUT_TSV}"
   fi
 
-	REFINE_OUT_LOG="logs/refine_bacs_submit_${TS}.out"
+  REFINE_OUT_LOG="logs/refine_bacs_submit_${TS}.out"
   REFINE_ERR_LOG="logs/refine_bacs_submit_${TS}.err"
 
   # If smORFs ran in the same runall.sh invocation, make refine depend on it.
