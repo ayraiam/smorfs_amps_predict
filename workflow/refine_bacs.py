@@ -274,6 +274,69 @@ def compute_step2_embedded_and_overlap(df: pd.DataFrame, cds_by_contig, min_host
         }
     }
 
+def load_mmseqs_cluster_map(cluster_map_tsv: str) -> pd.DataFrame:
+    cm = pd.read_csv(cluster_map_tsv, sep="\t", header=None, dtype=str).fillna("")
+    if cm.shape[1] < 2:
+        raise SystemExit(f"ERROR: cluster_map.tsv must have at least 2 columns. Got {cm.shape[1]}")
+    cm = cm.iloc[:, :2].copy()
+    cm.columns = ["member_id", "rep_id"]
+    return cm
+
+def attach_cluster_stats(df: pd.DataFrame, cluster_map_tsv: str, env_label: str | None = None) -> pd.DataFrame:
+    """
+    Expects df has 'feature_id'. If your df feature_id is NOT prefixed, we build:
+      member_id = f"{env_label}|{feature_id}"
+    If your df already has prefixed IDs, set env_label=None and ensure df has 'member_id' already.
+    """
+    ensure_cols(df, [
+        "cluster_id", "cluster_size", "cluster_env_count",
+        "flag_cluster_recurrent", "flag_cross_environment"
+    ])
+
+    cm = load_mmseqs_cluster_map(cluster_map_tsv)
+
+    # Build join key for df
+    if env_label:
+        df["member_id"] = env_label + "|" + df["feature_id"].astype(str)
+    else:
+        # If you already have prefixed IDs stored somewhere, use that column name here
+        df["member_id"] = df["feature_id"].astype(str)
+
+    # Stats per rep
+    # cluster_size = members per rep
+    rep_size = cm.groupby("rep_id")["member_id"].size().rename("cluster_size").reset_index()
+
+    # cluster_env_count = unique envs per rep (from member_id prefix)
+    cm["env_global"] = cm["member_id"].str.split("|", n=1).str[0] + "_GLOBAL"
+    rep_env = cm.groupby("rep_id")["env_global"].nunique().rename("cluster_env_count").reset_index()
+
+    rep_stats = rep_size.merge(rep_env, on="rep_id", how="left")
+
+    # Map member -> rep (cluster_id)
+    member_to_rep = cm[["member_id", "rep_id"]].drop_duplicates()
+
+    out = df.merge(member_to_rep, on="member_id", how="left")
+    out = out.merge(rep_stats, on="rep_id", how="left")
+
+    # Write into your schema columns
+    out["cluster_id"] = out["rep_id"].fillna("")
+    out["cluster_size"] = out["cluster_size"].fillna("").astype(str)
+    out["cluster_env_count"] = out["cluster_env_count"].fillna("").astype(str)
+
+    # Flags (you can tune thresholds)
+    # recurrent = cluster_size >= 2
+    # Flags (safe numeric conversion)
+    cs = pd.to_numeric(out["cluster_size"], errors="coerce").fillna(0).astype(int)
+    ec = pd.to_numeric(out["cluster_env_count"], errors="coerce").fillna(0).astype(int)
+
+    out["flag_cluster_recurrent"] = (cs >= 2).astype(int).astype(str)
+    out["flag_cross_environment"] = (ec >= 2).astype(int).astype(str)
+
+    # clean temporary cols
+    out.drop(columns=[c for c in ["rep_id"] if c in out.columns], inplace=True)
+
+    return out
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sample", required=True)
@@ -305,6 +368,9 @@ def main():
     "--smorfinder-gff", default="",
     help="SmORFinder GFF (smorf_output.gff). Used to map smorfinder feature_id -> contig/start/end."
     )
+
+    ap.add_argument("--cluster-map", default="", help="MMseqs cluster_map.tsv (member_id<TAB>rep_id).")
+    ap.add_argument("--env-label", default="", help="Environment label (e.g., RIPARIA). Used to build member_id=ENV|feature_id.")
 
     ap.set_defaults(filter_tiara_bacteria=True)
 
@@ -366,6 +432,10 @@ def main():
     if args.filter_tiara_bacteria:
         df = df[df["tiara_label"].apply(tiara_is_bacteria)].copy()
         print(f"[INFO] Filter tiara_label == 'bacteria/archaea/prokarya': {n0} -> {len(df)} rows")
+
+    if args.cluster_map:
+        env_label = args.env_label.strip() or None
+        df = attach_cluster_stats(df, args.cluster_map, env_label=env_label)
 
     # Ensure output schema exists
     ensure_cols(
