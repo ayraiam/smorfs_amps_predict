@@ -95,10 +95,17 @@ create_env() {
 }
 
 activate_env() {
-  init_conda
-  # shellcheck disable=SC1090
-  conda activate "${ENV_PREFIX}"
-  msg "Python: $(python -V)"
+  # HPC-safe: no conda activate needed for prefix envs
+  if [[ ! -x "${ENV_PREFIX}/bin/python" ]]; then
+    die "Env python not found: ${ENV_PREFIX}/bin/python (env incomplete?)"
+  fi
+
+  export PATH="${ENV_PREFIX}/bin:${PATH}"
+  hash -r
+
+  msg "Using env prefix: ${ENV_PREFIX}"
+  msg "Python: $(${ENV_PREFIX}/bin/python -V)"
+  msg "python on PATH: $(command -v python)"
 }
 
 run_one_sample() {
