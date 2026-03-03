@@ -2,53 +2,24 @@
 set -euo pipefail
 
 # --------------------------------------------------
-# Ensure refine_annot_smorf_bacs_env exists
-# and contains mmseqs2
+# Use the SAME env creation logic as refine stage
+# (single source of truth)
 # --------------------------------------------------
 
-ENV_PREFIX="envs/refine_annot_smorf_bacs_env"
+ENV_NAME="${REFINE_BACS_ENV:-refine_annot_smorf_bacs_env}"
+ENV_PREFIX="envs/${ENV_NAME}"
 
-init_conda() {
-  if command -v conda >/dev/null 2>&1; then
-    source "$(conda info --base)/etc/profile.d/conda.sh"
-    return 0
-  fi
-  for guess in "$HOME/miniforge3" "$HOME/miniconda3" "/opt/conda"; do
-    if [[ -f "${guess}/etc/profile.d/conda.sh" ]]; then
-      source "${guess}/etc/profile.d/conda.sh"
-      return 0
-    fi
-  done
-  echo "ERROR: conda not found."
-  exit 1
-}
+# Ensure env exists using the official helper (idempotent)
+bash workflow/run_refine_annot_smorf_bacs.sh --create-env --refine-env "${ENV_NAME}"
 
-init_conda
-
-if [[ ! -d "${ENV_PREFIX}" ]]; then
-  echo "[INFO] Creating refine_annot_smorf_bacs_env (with mmseqs2)..."
-  conda create -y -p "${ENV_PREFIX}" --override-channels \
-    -c conda-forge -c bioconda \
-    python=3.10 \
-    pandas \
-    numpy \
-    pyarrow \
-    biopython \
-    gffutils \
-    pyranges \
-    intervaltree \
-    seqkit \
-    mmseqs2
-else
-  echo "[INFO] Using existing refine_annot_smorf_bacs_env"
-fi
-
+# Activate it
 conda activate "${ENV_PREFIX}"
 
-if ! command -v mmseqs >/dev/null 2>&1; then
-  echo "[INFO] mmseqs2 not found inside env. Installing..."
-  conda install -y -c conda-forge -c bioconda mmseqs2
-fi
+# Sanity check
+command -v mmseqs >/dev/null 2>&1 || {
+  echo "ERROR: mmseqs not found after activating ${ENV_PREFIX}" >&2
+  exit 1
+}
 
 echo "[INFO] Using mmseqs from: $(which mmseqs)"
 
