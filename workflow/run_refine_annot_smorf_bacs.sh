@@ -9,6 +9,8 @@ MODE=""
 SAMPLE=""
 SAMPLES_FILE=""
 INPUT_TSV=""
+CLUSTER_MAP_TSV=""
+ENV_LABEL=""
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 msg() { echo "[$(date +'%F %T')] $*" >&2; }
@@ -38,6 +40,8 @@ Usage:
   workflow/run_refine_annot_smorf_bacs.sh --run --samples-file FILE --cpus 8
 Optional:
   --input-tsv PATH    (advanced override; usually leave empty)
+  --cluster-map PATH  (default: results/smorfs/GLOBAL/mmseqs/cluster_map.tsv if exists)
+  --env-label STR     (default: inferred from SAMPLE_ID like PENEIRA_GLOBAL -> PENEIRA)
 EOF
 }
 
@@ -50,6 +54,8 @@ while [[ $# -gt 0 ]]; do
     --sample) SAMPLE="$2"; shift 2 ;;
     --samples-file) SAMPLES_FILE="$2"; shift 2 ;;
     --input-tsv) INPUT_TSV="$2"; shift 2 ;;
+    --cluster-map) CLUSTER_MAP_TSV="$2"; shift 2 ;;
+    --env-label) ENV_LABEL="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -97,6 +103,31 @@ activate_env() {
 
 run_one_sample() {
   local sample_id="$1"
+  # Infer env label from SAMPLE_ID like PENEIRA_GLOBAL -> PENEIRA
+  local inferred_env=""
+  if [[ "${sample_id}" =~ ^(RIPARIA|PENEIRA|CAMPINA|UNIFORME)_GLOBAL$ ]]; then
+    inferred_env="${BASH_REMATCH[1]}"
+  fi
+
+  # Cluster map default (global)
+  local cluster_map="${CLUSTER_MAP_TSV}"
+  if [[ -z "${cluster_map}" ]]; then
+    cluster_map="${results_dir}/smorfs/GLOBAL/mmseqs/cluster_map.tsv"
+  fi
+
+  # Choose env label: explicit > inferred
+  local env_label_final="${ENV_LABEL}"
+  if [[ -z "${env_label_final}" && -n "${inferred_env}" ]]; then
+    env_label_final="${inferred_env}"
+  fi
+
+  # Build python args only if cluster_map exists
+  local cluster_args=()
+  if [[ -f "${cluster_map}" && -n "${env_label_final}" ]]; then
+    cluster_args=( --cluster-map "${cluster_map}" --env-label "${env_label_final}" )
+  else
+    msg "[${sample_id}] NOTE: cluster stats not attached (missing cluster_map or env_label). cluster_map=${cluster_map} env_label=${env_label_final}"
+  fi
   local results_dir="${RESULTS_DIR:-results}"
   local sample_dir="${results_dir}/smorfs/${sample_id}"
   [[ -d "${sample_dir}" ]] || die "Sample smorfs dir not found: ${sample_dir}"
@@ -145,6 +176,7 @@ run_one_sample() {
   python workflow/refine_bacs.py \
     --sample "${sample_id}" \
     --input-tsv "${in_tsv}" \
+    "${cluster_args[@]}" \
     "${gff_args[@]}" \
     "${smorf_args[@]}" \
     --bac-contigs "${bac_fa}" \
