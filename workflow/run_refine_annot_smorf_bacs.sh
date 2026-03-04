@@ -110,6 +110,7 @@ activate_env() {
 
 run_one_sample() {
   local sample_id="$1"
+  local results_dir="${RESULTS_DIR:-results}"
   # Infer env label from SAMPLE_ID like PENEIRA_GLOBAL -> PENEIRA
   local inferred_env=""
   if [[ "${sample_id}" =~ ^(RIPARIA|PENEIRA|CAMPINA|UNIFORME)_GLOBAL$ ]]; then
@@ -135,7 +136,6 @@ run_one_sample() {
   else
     msg "[${sample_id}] NOTE: cluster stats not attached (missing cluster_map or env_label). cluster_map=${cluster_map} env_label=${env_label_final}"
   fi
-  local results_dir="${RESULTS_DIR:-results}"
   local sample_dir="${results_dir}/smorfs/${sample_id}"
   [[ -d "${sample_dir}" ]] || die "Sample smorfs dir not found: ${sample_dir}"
 
