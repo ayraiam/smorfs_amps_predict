@@ -11,6 +11,7 @@ SAMPLES_FILE=""
 INPUT_TSV=""
 CLUSTER_MAP_TSV=""
 ENV_LABEL=""
+CLUSTER_ONLY=0
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 msg() { echo "[$(date +'%F %T')] $*" >&2; }
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --input-tsv) INPUT_TSV="$2"; shift 2 ;;
     --cluster-map) CLUSTER_MAP_TSV="$2"; shift 2 ;;
     --env-label) ENV_LABEL="$2"; shift 2 ;;
+    --cluster-only) CLUSTER_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -189,6 +191,7 @@ run_one_sample() {
     --bac-contigs "${bac_fa}" \
     --results-dir "${results_dir}" \
     --out "${out_tsv}" \
+    ${CLUSTER_ONLY:+--cluster-only} \
     --cpus "${CPUS}"
 }
 
