@@ -12,12 +12,18 @@ ENV_PREFIX="envs/${ENV_NAME}"
 # Ensure env exists using the official helper (idempotent)
 bash workflow/run_refine_annot_smorf_bacs.sh --create-env --refine-env "${ENV_NAME}"
 
-# Activate it
-conda activate "${ENV_PREFIX}"
+# "Activate" prefix env (HPC-safe; no conda init needed)
+if [[ ! -x "${ENV_PREFIX}/bin/mmseqs" ]]; then
+  echo "ERROR: mmseqs not found in ${ENV_PREFIX}/bin (env incomplete?)" >&2
+  ls -lah "${ENV_PREFIX}/bin" | head -n 50 >&2 || true
+  exit 1
+fi
 
-# Sanity check
+export PATH="${ENV_PREFIX}/bin:${PATH}"
+hash -r
+
 command -v mmseqs >/dev/null 2>&1 || {
-  echo "ERROR: mmseqs not found after activating ${ENV_PREFIX}" >&2
+  echo "ERROR: mmseqs still not found after PATH prepend: ${ENV_PREFIX}/bin" >&2
   exit 1
 }
 
