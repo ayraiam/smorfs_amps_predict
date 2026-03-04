@@ -676,16 +676,24 @@ finalize_step2_catalog_and_table() {
     cat "${outdir}/bac/smorfinder/smorf_output/smorf_output.faa" >> "${peptides_all}"
   fi
 
-  # 3) Funannotate proteins (if found earlier, we already made fungi_le_100aa.faa)
-  # Here we prefer the full predicted proteins if you found them, otherwise use the <=100aa file.
-  local fun_prot_full
-  fun_prot_full="$(find "${outdir}/fungi/funannotate_out" -maxdepth 5 -type f \
-    \( -iname "*proteins*.fa" -o -iname "*proteins*.faa" -o -iname "*protein*.fa" -o -iname "*protein*.faa" \) \
-    | head -n 1 || true)"
-  if [[ -n "${fun_prot_full}" && -s "${fun_prot_full}" ]]; then
-    cat "${fun_prot_full}" >> "${peptides_all}"
-  elif [[ -s "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" ]]; then
-    cat "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" >> "${peptides_all}"
+  # 3) Funannotate proteins (ONLY if RUN_FUNANNOTATE=1)
+  if [[ "${RUN_FUNANNOTATE:-0}" -eq 1 ]]; then
+
+    local fun_prot_full
+    fun_prot_full="$(find "${outdir}/fungi/funannotate_out" -maxdepth 5 -type f \
+      \( -iname "*proteins*.fa" -o -iname "*proteins*.faa" -o -iname "*protein*.fa" -o -iname "*protein*.faa" \) \
+      | head -n 1 || true)"
+
+    if [[ -n "${fun_prot_full}" && -s "${fun_prot_full}" ]]; then
+      msg "[${sample_id}] Appending funannotate proteins: ${fun_prot_full}"
+      cat "${fun_prot_full}" >> "${peptides_all}"
+    elif [[ -s "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" ]]; then
+      msg "[${sample_id}] Appending funannotate peptides <=${MAX_FUNGAL_PEPTIDE_AA}aa"
+      cat "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" >> "${peptides_all}"
+    fi
+
+  else
+    msg "[${sample_id}] RUN_FUNANNOTATE=0 → skipping funannotate proteins"
   fi
 
   # ---- cds_all.fna (NT) ----
@@ -699,18 +707,24 @@ finalize_step2_catalog_and_table() {
     cat "${outdir}/bac/smorfinder/smorf_output/smorf_output.ffn" >> "${cds_all}"
   fi
 
-  # 3) Funannotate CDS NT: best-effort find under output (varies by version)
-  local fun_cds
-  fun_cds="$(find "${outdir}/fungi/funannotate_out" -maxdepth 6 -type f \
-    \( -iname "*cds*.fa" -o -iname "*cds*.fna" -o -iname "*transcripts*.fa" -o -iname "*transcripts*.fna" \) \
-    | head -n 1 || true)"
+  # 3) Funannotate CDS NT (ONLY if RUN_FUNANNOTATE=1)
+  if [[ "${RUN_FUNANNOTATE:-0}" -eq 1 ]]; then
 
-  if [[ -n "${fun_cds}" && -s "${fun_cds}" ]]; then
-    if is_probably_nt_fasta "${fun_cds}"; then
-      cat "${fun_cds}" >> "${cds_all}"
-    else
-      msg "[${sample_id}] NOTE: funannotate candidate NT file is not NT-like, skipping: ${fun_cds}"
+    local fun_cds
+    fun_cds="$(find "${outdir}/fungi/funannotate_out" -maxdepth 6 -type f \
+      \( -iname "*cds*.fa" -o -iname "*cds*.fna" -o -iname "*transcripts*.fa" -o -iname "*transcripts*.fna" \) \
+      | head -n 1 || true)"
+
+    if [[ -n "${fun_cds}" && -s "${fun_cds}" ]]; then
+      if is_probably_nt_fasta "${fun_cds}"; then
+        cat "${fun_cds}" >> "${cds_all}"
+      else
+        msg "[${sample_id}] NOTE: funannotate candidate NT file is not NT-like, skipping: ${fun_cds}"
+      fi
     fi
+
+  else
+    msg "[${sample_id}] RUN_FUNANNOTATE=0 → skipping funannotate CDS"
   fi
 
   # If either is empty, keep the file but note it in logs
