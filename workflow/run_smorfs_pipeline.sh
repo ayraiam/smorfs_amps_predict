@@ -473,11 +473,19 @@ run_smorfinder_bac() {
 
   msg "[${sample_id}] Running SmORFinder (TF env) on: ${outdir}/contigs/bac_contigs.fasta"
 
-  conda run -p "${TF_ENV_PREFIX}" \
-    smorf meta "${outdir}/contigs/bac_contigs.fasta" --threads "${CPUS}" \
-    > "${outdir}/bac/smorfinder/smorfinder.stdout.log" \
-    2> "${outdir}/bac/smorfinder/smorfinder.stderr.log" || true
+  # Run smorf FROM the intended directory so its default ./smorf_output lands here
+  (
+    cd "${outdir}/bac/smorfinder"
+    conda run -p "${TF_ENV_PREFIX}" \
+      smorf meta "${outdir}/contigs/bac_contigs.fasta" --threads "${CPUS}" \
+      > "smorfinder.stdout.log" \
+      2> "smorfinder.stderr.log"
+  ) || true
 
+  # Optional: sanity check + helpful warning
+  if [[ ! -d "${outdir}/bac/smorfinder/smorf_output" ]]; then
+    msg "[${sample_id}] WARNING: smorf_output not found under ${outdir}/bac/smorfinder. SmORFinder may have failed or wrote elsewhere."
+  fi
 }
 
 # ---------------------------
