@@ -141,16 +141,29 @@ run_one_sample() {
   local sample_dir="${results_dir}/smorfs/${sample_id}"
   [[ -d "${sample_dir}" ]] || die "Sample smorfs dir not found: ${sample_dir}"
 
-  # Default input TSV: you can adjust to your actual naming
+  # Default input TSV selection:
+  # - Normal mode: prefer with_macrel if exists else predicted_smorfs.tsv
+  # - CLUSTER_ONLY mode: prefer existing refined output (from a previous full run)
   local in_tsv
   if [[ -n "${INPUT_TSV}" ]]; then
     in_tsv="${INPUT_TSV}"
   else
-    # prefer with_macrel if exists; fallback to predicted_smorfs.tsv
-    if [[ -f "${sample_dir}/catalog/predicted_smorfs.with_macrel.tsv" ]]; then
-      in_tsv="${sample_dir}/catalog/predicted_smorfs.with_macrel.tsv"
+    if [[ "${CLUSTER_ONLY}" -eq 1 ]]; then
+      # If we're only attaching cluster stats, we MUST start from the refined table,
+      # otherwise we overwrite Step1/2 columns.
+      if [[ -f "${sample_dir}/catalog/predicted_smorfs.with_macrel.refined_bacs.tsv" ]]; then
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.with_macrel.refined_bacs.tsv"
+      elif [[ -f "${sample_dir}/catalog/predicted_smorfs.refined_bacs.tsv" ]]; then
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.refined_bacs.tsv"
+      else
+        die "[${sample_id}] cluster-only requested but no refined_bacs.tsv found. Run full refine first (no --cluster-only)."
+      fi
     else
-      in_tsv="${sample_dir}/catalog/predicted_smorfs.tsv"
+      if [[ -f "${sample_dir}/catalog/predicted_smorfs.with_macrel.tsv" ]]; then
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.with_macrel.tsv"
+      else
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.tsv"
+      fi
     fi
   fi
   [[ -f "${in_tsv}" ]] || die "Input TSV not found: ${in_tsv}"
@@ -179,7 +192,12 @@ run_one_sample() {
   local bac_fa="${sample_dir}/contigs/bac_contigs.fasta"
   [[ -f "${bac_fa}" ]] || msg "[${sample_id}] NOTE: bac_contigs.fasta missing: ${bac_fa}"
 
-  local out_tsv="${sample_dir}/catalog/$(basename "${in_tsv%.tsv}").refined_bacs.tsv"
+  local out_tsv
+  if [[ "${CLUSTER_ONLY}" -eq 1 ]]; then
+    out_tsv="${sample_dir}/catalog/$(basename "${in_tsv%.tsv}").with_clusters.tsv"
+  else
+    out_tsv="${sample_dir}/catalog/$(basename "${in_tsv%.tsv}").refined_bacs.tsv"
+  fi
 
   msg "[${sample_id}] Running refine python"
   python workflow/refine_bacs.py \
