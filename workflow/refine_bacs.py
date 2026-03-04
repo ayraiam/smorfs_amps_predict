@@ -284,29 +284,32 @@ def load_mmseqs_cluster_map(cluster_map_tsv: str) -> pd.DataFrame:
 
 def attach_cluster_stats(df: pd.DataFrame, cluster_map_tsv: str, env_label: str | None = None) -> pd.DataFrame:
     """
-    Expects df has 'feature_id'. If your df feature_id is NOT prefixed, we build:
-      member_id = f"{env_label}|{feature_id}"
-    If your df already has prefixed IDs, set env_label=None and ensure df has 'member_id' already.
+    Attach MMseqs cluster stats:
+      - cluster_id (rep_id)
+      - cluster_size (members per rep)
+      - cluster_env_count (unique envs per rep)
+      - flag_cluster_recurrent, flag_cross_environment
     """
-    ensure_cols(df, [
-        "cluster_id", "cluster_size", "cluster_env_count",
-        "flag_cluster_recurrent", "flag_cross_environment"
-    ])
 
     cm = load_mmseqs_cluster_map(cluster_map_tsv)
 
     # Build join key for df
+    df = df.copy()
     if env_label:
         df["member_id"] = env_label + "|" + df["feature_id"].astype(str)
     else:
-        # If you already have prefixed IDs stored somewhere, use that column name here
         df["member_id"] = df["feature_id"].astype(str)
 
+    # IMPORTANT:
+    # If df already has cluster_* columns, merging rep_stats will create suffixes (_x/_y).
+    # Drop them before merge so output columns have clean names.
+    to_drop = ["cluster_id", "cluster_size", "cluster_env_count",
+               "flag_cluster_recurrent", "flag_cross_environment"]
+    df.drop(columns=[c for c in to_drop if c in df.columns], inplace=True, errors="ignore")
+
     # Stats per rep
-    # cluster_size = members per rep
     rep_size = cm.groupby("rep_id")["member_id"].size().rename("cluster_size").reset_index()
 
-    # cluster_env_count = unique envs per rep (from member_id prefix)
     cm["env_global"] = cm["member_id"].str.split("|", n=1).str[0] + "_GLOBAL"
     rep_env = cm.groupby("rep_id")["env_global"].nunique().rename("cluster_env_count").reset_index()
 
@@ -323,18 +326,13 @@ def attach_cluster_stats(df: pd.DataFrame, cluster_map_tsv: str, env_label: str 
     out["cluster_size"] = out["cluster_size"].fillna("").astype(str)
     out["cluster_env_count"] = out["cluster_env_count"].fillna("").astype(str)
 
-    # Flags (you can tune thresholds)
-    # recurrent = cluster_size >= 2
-    # Flags (safe numeric conversion)
     cs = pd.to_numeric(out["cluster_size"], errors="coerce").fillna(0).astype(int)
     ec = pd.to_numeric(out["cluster_env_count"], errors="coerce").fillna(0).astype(int)
 
     out["flag_cluster_recurrent"] = (cs >= 2).astype(int).astype(str)
     out["flag_cross_environment"] = (ec >= 2).astype(int).astype(str)
 
-    # clean temporary cols
-    out.drop(columns=[c for c in ["rep_id"] if c in out.columns], inplace=True)
-
+    out.drop(columns=["rep_id"], inplace=True, errors="ignore")
     return out
 
 def main():
