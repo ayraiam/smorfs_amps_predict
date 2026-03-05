@@ -22,12 +22,13 @@ if (!file.exists(metrics_tsv)) {
 
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 
-median_minmax <- function(x) {
+median_iqr <- function(x) {
   x <- x[is.finite(x)]
+  qs <- stats::quantile(x, probs = c(0.25, 0.75), na.rm = TRUE)
   data.frame(
     y = median(x),
-    ymin = min(x),
-    ymax = max(x)
+    ymin = qs[[1]],
+    ymax = qs[[2]]
   )
 }
 
@@ -90,7 +91,7 @@ for (col in numeric_cols) {
       alpha = 0.3
     ) +
     stat_summary(
-      fun.data = median_minmax,
+      fun.data = median_iqr,
       geom = "errorbar",
       width = 0.15,
       color = "grey40",
