@@ -471,33 +471,29 @@ run_smorfinder_bac() {
 
   local TF_ENV_PREFIX="${PROJECT_ROOT}/${ENV_PREFIX_DIR}/smorf_tf_env"
 
-  msg "[${sample_id}] Running SmORFinder (TF env) on: ${outdir}/contigs/bac_contigs.fasta"
+  # --- make paths absolute to survive the 'cd' below ---
+  local bac_abs out_abs
+  bac_abs="$(realpath "${bac_fa}")"
+  out_abs="$(realpath "${outdir}")"
 
-  # Run smorf FROM the intended directory so its default ./smorf_output lands here
+  msg "[${sample_id}] Running SmORFinder (TF env) on: ${bac_abs}"
+
   local smorf_rc=0
   (
-    cd "${outdir}/bac/smorfinder"
+    cd "${out_abs}/bac/smorfinder"
     conda run -p "${TF_ENV_PREFIX}" \
-      smorf meta "${outdir}/contigs/bac_contigs.fasta" --threads "${CPUS}" \
+      smorf meta "${bac_abs}" --threads "${CPUS}" \
       > "smorfinder.stdout.log" \
       2> "smorfinder.stderr.log"
   ) || smorf_rc=$?
 
   if [[ "${smorf_rc}" -ne 0 ]]; then
     msg "[${sample_id}] WARNING: SmORFinder exited non-zero (rc=${smorf_rc}). See:"
-    msg "  ${outdir}/bac/smorfinder/smorfinder.stderr.log"
+    msg "  ${out_abs}/bac/smorfinder/smorfinder.stderr.log"
   fi
 
-  if [[ ! -d "${outdir}/bac/smorfinder/smorf_output" ]]; then
-    msg "[${sample_id}] WARNING: smorf_output not found under ${outdir}/bac/smorfinder."
-    msg "[${sample_id}] Debug:"
-    msg "  tail -n 50 ${outdir}/bac/smorfinder/smorfinder.stderr.log"
-    msg "  ls -lah ${outdir}/bac/smorfinder"
-  fi
-
-  # Optional: sanity check + helpful warning
-  if [[ ! -d "${outdir}/bac/smorfinder/smorf_output" ]]; then
-    msg "[${sample_id}] WARNING: smorf_output not found under ${outdir}/bac/smorfinder. SmORFinder may have failed or wrote elsewhere."
+  if [[ ! -d "${out_abs}/bac/smorfinder/smorf_output" ]]; then
+    msg "[${sample_id}] WARNING: smorf_output not found under ${out_abs}/bac/smorfinder."
   fi
 }
 
