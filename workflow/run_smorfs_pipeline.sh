@@ -474,13 +474,26 @@ run_smorfinder_bac() {
   msg "[${sample_id}] Running SmORFinder (TF env) on: ${outdir}/contigs/bac_contigs.fasta"
 
   # Run smorf FROM the intended directory so its default ./smorf_output lands here
+  local smorf_rc=0
   (
     cd "${outdir}/bac/smorfinder"
     conda run -p "${TF_ENV_PREFIX}" \
       smorf meta "${outdir}/contigs/bac_contigs.fasta" --threads "${CPUS}" \
       > "smorfinder.stdout.log" \
       2> "smorfinder.stderr.log"
-  ) || true
+  ) || smorf_rc=$?
+
+  if [[ "${smorf_rc}" -ne 0 ]]; then
+    msg "[${sample_id}] WARNING: SmORFinder exited non-zero (rc=${smorf_rc}). See:"
+    msg "  ${outdir}/bac/smorfinder/smorfinder.stderr.log"
+  fi
+
+  if [[ ! -d "${outdir}/bac/smorfinder/smorf_output" ]]; then
+    msg "[${sample_id}] WARNING: smorf_output not found under ${outdir}/bac/smorfinder."
+    msg "[${sample_id}] Debug:"
+    msg "  tail -n 50 ${outdir}/bac/smorfinder/smorfinder.stderr.log"
+    msg "  ls -lah ${outdir}/bac/smorfinder"
+  fi
 
   # Optional: sanity check + helpful warning
   if [[ ! -d "${outdir}/bac/smorfinder/smorf_output" ]]; then
@@ -637,15 +650,16 @@ finalize_step2_catalog_and_table() {
 	# -----------------------------
   # SmORFinder: feature_id -> contig_id map (from smorf_output.gff)
   # -----------------------------
+	# -----------------------------
+  # SmORFinder: feature_id -> contig_id map (from smorf_output.gff)
+  # Put this map in catalog/ (always exists), NOT inside smorf_output/
+  # -----------------------------
   local smorf_gff="${outdir}/bac/smorfinder/smorf_output/smorf_output.gff"
-  local smorf_map="${outdir}/bac/smorfinder/smorf_output/feature_to_contig.tsv"
+  local smorf_map="${outdir}/catalog/feature_to_contig.smorfinder.tsv"
 
-  : > "${smorf_map}"
+  : > "${smorf_map}"  # safe because catalog/ exists
+
   if [[ -s "${smorf_gff}" ]]; then
-    # GFF columns: seqid source type start end score strand phase attributes
-    # We extract:
-    #   - contig_id = column1 (seqid)
-    #   - feature_id from attributes: ID=... (or Name=... as fallback)
     awk -F'\t' '
       BEGIN{OFS="\t"}
       $0 ~ /^#/ {next}
@@ -656,11 +670,13 @@ finalize_step2_catalog_and_table() {
         n=split(attrs, a, ";")
         for(i=1;i<=n;i++){
           if(a[i] ~ /^ID=/){ sub(/^ID=/,"",a[i]); id=a[i]; break }
-          if(id=="" && a[i] ~ /^Name=/){ sub(/^Name=/,"",a[i]); id=a[i] } # fallback
+          if(id=="" && a[i] ~ /^Name=/){ sub(/^Name=/,"",a[i]); id=a[i] }
         }
         if(id != "") print id, contig
       }
     ' "${smorf_gff}" | sort -u > "${smorf_map}"
+  else
+    msg "[${sample_id}] NOTE: SmORFinder GFF missing/empty: ${smorf_gff} (smorf2contig will be empty)"
   fi
 
   if [[ ! -s "${tiara_map}" ]]; then
@@ -966,4 +982,3 @@ elif [[ -n "${SAMPLES_FILE}" ]]; then
 else
   die "Provide --sample <id> or --samples-file <file>"
 fi
-
