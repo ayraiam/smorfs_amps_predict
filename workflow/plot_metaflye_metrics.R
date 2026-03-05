@@ -45,10 +45,10 @@ if (length(numeric_cols) == 0) {
 }
 
 env_colors <- c(
-  CAMPINA  = "#FFCC00",
-  UNIFORME = "#99CC33",
-  RIPARIA  = "#3399FF",
-  PENEIRA  = "#FF9900"
+  CAMPINA_GLOBAL  = "#FFCC00",
+  UNIFORME_GLOBAL = "#99CC33",
+  RIPARIA_GLOBAL  = "#3399FF",
+  PENEIRA_GLOBAL  = "#FF9900"
 )
 
 for (col in numeric_cols) {
@@ -72,6 +72,20 @@ for (col in numeric_cols) {
       dodge.width = 0.75,
       alpha = 0.8,
       color = "black"
+    ) +
+    stat_summary(
+      fun = median,
+      geom = "crossbar",
+      width = 0.25,
+      color = "grey40",
+      alpha = 0.5
+    ) +
+    stat_summary(
+      fun.data = mean_cl_normal,
+      geom = "errorbar",
+      width = 0.15,
+      color = "grey40",
+      alpha = 0.5
     ) +
     
     scale_fill_manual(values = env_colors) +
