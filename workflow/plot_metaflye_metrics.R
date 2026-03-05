@@ -22,6 +22,15 @@ if (!file.exists(metrics_tsv)) {
 
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 
+median_minmax <- function(x) {
+  x <- x[is.finite(x)]
+  data.frame(
+    y = median(x),
+    ymin = min(x),
+    ymax = max(x)
+  )
+}
+
 df <- read_tsv(metrics_tsv, show_col_types = FALSE)
 
 # Columns you want to plot (ignore non-numeric + 'site')
@@ -78,14 +87,14 @@ for (col in numeric_cols) {
       geom = "crossbar",
       width = 0.25,
       color = "grey40",
-      alpha = 0.5
+      alpha = 0.3
     ) +
     stat_summary(
-      fun.data = mean_cl_normal,
+      fun.data = median_minmax,
       geom = "errorbar",
       width = 0.15,
       color = "grey40",
-      alpha = 0.5
+      alpha = 0.3
     ) +
     
     scale_fill_manual(values = env_colors) +
