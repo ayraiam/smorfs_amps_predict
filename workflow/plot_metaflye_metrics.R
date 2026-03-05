@@ -52,35 +52,29 @@ env_colors <- c(
 )
 
 for (col in numeric_cols) {
-  y <- df[[col]]
-  if (!is.numeric(y)) {
-    y <- suppressWarnings(as.numeric(y))
-  }
   
-  # Drop NAs for plotting
-  y <- y[!is.na(y)]
+  # Build a per-metric plotting df with aligned value + site
+  df_plot <- df %>%
+    transmute(
+      site = .data$site,
+      val  = suppressWarnings(as.numeric(.data[[col]]))
+    ) %>%
+    filter(!is.na(val))
   
-  if (length(y) == 0) next
+  if (nrow(df_plot) == 0) next
   
-  df_plot <- df
-  df_plot$value <- y
-  df_plot <- df_plot[!is.na(df_plot$value), ]
-  
-  p <- ggplot(df_plot, aes(x = site, y = value, color = site)) +
+  p <- ggplot(df_plot, aes(x = "", y = val)) +
     
-    geom_boxplot(
-      width = 0.3,
-      outlier.shape = NA,
-      fill = NA,
+    geom_quasirandom(
+      aes(fill = site),
+      shape = 21,
+      size = 1.5,
+      dodge.width = 0.75,
+      alpha = 0.8,
       color = "black"
     ) +
     
-    geom_quasirandom(
-      size = 3,
-      alpha = 0.85
-    ) +
-    
-    scale_color_manual(values = env_colors) +
+    scale_fill_manual(values = env_colors) +
     
     labs(
       title = "",
@@ -89,14 +83,20 @@ for (col in numeric_cols) {
     ) +
     
     theme_classic(base_size = 16) +
-    
     theme(
-      legend.position = "none",
-      axis.text.x = element_text(size = 12),
-      axis.title = element_text(size = 14)
-    )
+      panel.grid       = element_blank(),
+      strip.background = element_rect(color = NA),
+      axis.text.y      = element_blank(),
+      axis.ticks.y     = element_blank(),
+      legend.position  = "right",
+      legend.title     = element_text(size = 14),
+      legend.text      = element_text(size = 12),
+      axis.title       = element_text(size = 14),
+      axis.text        = element_text(size = 12)
+    ) +
+    coord_flip()
   
-  out_png <- file.path(plots_dir, paste0("boxplot_", col, ".png"))
+  out_png <- file.path(plots_dir, paste0("stripchart_", col, ".png"))
   ggsave(out_png, plot = p, width = 6, height = 2, dpi = 200)
 }
 
