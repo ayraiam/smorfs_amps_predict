@@ -200,17 +200,24 @@ run_one_sample() {
   fi
 
   msg "[${sample_id}] Running refine python"
-  python workflow/refine_bacs.py \
-    --sample "${sample_id}" \
-    --input-tsv "${in_tsv}" \
-    "${cluster_args[@]}" \
-    "${gff_args[@]}" \
-    "${smorf_args[@]}" \
-    --bac-contigs "${bac_fa}" \
-    --results-dir "${results_dir}" \
-    --out "${out_tsv}" \
-    ${CLUSTER_ONLY:+--cluster-only} \
+  py_args=(
+    --sample "${sample_id}"
+    --input-tsv "${in_tsv}"
+    --bac-contigs "${bac_fa}"
+    --results-dir "${results_dir}"
+    --out "${out_tsv}"
     --cpus "${CPUS}"
+  )
+
+  py_args+=( "${cluster_args[@]}" )
+  py_args+=( "${gff_args[@]}" )
+  py_args+=( "${smorf_args[@]}" )
+
+  if [[ "${CLUSTER_ONLY}" -eq 1 ]]; then
+    py_args+=( --cluster-only )
+  fi
+
+  python workflow/refine_bacs.py "${py_args[@]}"
 }
 
 if [[ "${MODE}" == "create-env" ]]; then
