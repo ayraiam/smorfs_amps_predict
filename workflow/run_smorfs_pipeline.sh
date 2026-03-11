@@ -490,7 +490,8 @@ run_metaeuk_fungi() {
   local fungi_fa="$2"
   local outdir="$3"
 
-  mkdirp "${outdir}/fungi/metaeuk"
+  local final_dir="${outdir}/fungi/metaeuk"
+  mkdirp "${final_dir}"
 
   if [[ ! -s "${fungi_fa}" ]]; then
     msg "[${sample_id}] No fungal/euk contigs FASTA found. Skipping MetaEuk."
@@ -500,13 +501,22 @@ run_metaeuk_fungi() {
   [[ -n "${METAEUK_DB}" ]] || die "[${sample_id}] METAEUK_DB is not set."
   [[ -e "${METAEUK_DB}" ]] || die "[${sample_id}] METAEUK_DB not found: ${METAEUK_DB}"
 
-  local prefix="${outdir}/fungi/metaeuk/metaeuk_preds"
-  local tmpdir="${outdir}/fungi/metaeuk/tmp"
+  local prefix="${final_dir}/metaeuk_preds"
+
+  # Scratch tmp dir mirrors sample structure under /scratch
+  local scratch_root="${SCRATCH_METAEUK_ROOT:-/scratch/t.sousa}"
+  local rel_sample_dir
+  rel_sample_dir="$(realpath --relative-to="${RESULTS_DIR}" "${outdir}")"
+  local tmpdir="${scratch_root}/smorfs/${rel_sample_dir}/fungi/metaeuk/tmp"
 
   rm -rf "${tmpdir}"
   mkdir -p "${tmpdir}"
 
   msg "[${sample_id}] Running MetaEuk on fungal/euk contigs"
+  msg "[${sample_id}] Final outputs: ${final_dir}"
+  msg "[${sample_id}] Scratch tmp:   ${tmpdir}"
+
+  local rc=0
   metaeuk easy-predict \
     "${fungi_fa}" \
     "${METAEUK_DB}" \
@@ -514,8 +524,14 @@ run_metaeuk_fungi() {
     "${tmpdir}" \
     --threads "${CPUS}" \
     --min-length "${METAEUK_MIN_AA}" \
-    > "${outdir}/fungi/metaeuk/metaeuk.stdout.log" \
-    2> "${outdir}/fungi/metaeuk/metaeuk.stderr.log"
+    > "${final_dir}/metaeuk.stdout.log" \
+    2> "${final_dir}/metaeuk.stderr.log" || rc=$?
+
+  if [[ "${rc}" -ne 0 ]]; then
+    msg "[${sample_id}] WARNING: MetaEuk failed with exit code ${rc}"
+    msg "[${sample_id}] See logs: ${final_dir}/metaeuk.stderr.log"
+    return "${rc}"
+  fi
 
   if [[ ! -s "${prefix}.fas" ]]; then
     msg "[${sample_id}] WARNING: MetaEuk produced no protein FASTA (${prefix}.fas)."
@@ -524,7 +540,12 @@ run_metaeuk_fungi() {
 
   # Short fungal/euk proteins for NR catalog
   seqkit seq -M "${MAX_FUNGAL_PEPTIDE_AA}" "${prefix}.fas" \
-    > "${outdir}/fungi/metaeuk/metaeuk_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa"
+    > "${final_dir}/metaeuk_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa"
+
+  # Optional cleanup of scratch tmp after success
+  rm -rf "${tmpdir}"
+
+  msg "[${sample_id}] MetaEuk outputs ready in: ${final_dir}"
 }
 
 # ---------------------------
