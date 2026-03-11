@@ -1,30 +1,40 @@
 <!-- LOGO -->
 <p align="center">
-  <img src="https://github.com/ayrdelta/.github/blob/main/profile/logo.png" alt="AY:RΔ Logo" width="120"/>
+  <img src="assets/logo-horizontal.png" alt="AY:RΔ Logo" width="160"/>
 </p>
 
 <h1 align="center" style="font-weight: normal;">smorfs_amps_predict</h1>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/pipeline-HPC--native-green"/>
+  <img src="https://img.shields.io/badge/data-Nanopore-orange"/>
+  <img src="https://img.shields.io/badge/target-smORFs%20%2B%20AMPs-purple"/>
+  <img src="https://img.shields.io/badge/license-MIT-blue"/>
+</p>
 
 <p align="center">
   <code>data and discovery in flow</code><br/>
   <a href="mailto:ayrabioinf@gmail.com">ayrabioinf@gmail.com</a> · 
   <a href="https://www.linkedin.com/company/aryaiam">LinkedIn</a>
 </p>
-
 ---
 
 <pre>
 ABOUT
 -----
-smorfs_amps_predict is a lightweight, reproducible, HPC-native pipeline for
+smorfs_amps_predict is a reproducible, HPC-native pipeline for
 Oxford Nanopore shotgun metagenomic data, providing a modular framework for:
 
   1) Read-level quality control and diagnostics (safe, read-only by default)
   2) Scalable metagenome co-assembly using Flye (--meta)
      • Per-sample (SampleID) co-assemblies
      • Single global co-assembly across all libraries
-  3) On-demand smORF prediction (bacterial + fungal)
-  4) AMP prediction via Macrel (two operational modes)
+  3) smORF and short-protein discovery
+   • Bacterial ORFs via Prodigal
+   • smORF candidates via SmORFinder
+   • Eukaryotic/fungal proteins via MetaEuk
+  4) AMP prediction via Macrel
+   • Supports bacterial/archaeal/prokarya and fungal peptides
   5) Bacterial smORF refinement based on genomic context
   6) Downstream assembly metrics + visualization
 
@@ -39,6 +49,44 @@ All major stages are explicitly decoupled:
 This design enables reproducibility, re-entrancy, and HPC-scalable workflows.
 </pre>
 
+<pre>
+PIPELINE OVERVIEW
+-----------------
+
+Raw reads
+   │
+   ▼
+Quality Control (FastQC / NanoPlot / SeqKit)
+   │
+   ▼
+MetaFlye assembly (--meta)
+   │
+   ▼
+Contig classification (Tiara)
+   │
+   ├── Bacterial / Prokaryotic contigs
+   │      │
+   │      ├─ Prodigal → protein-coding ORFs
+   │      └─ SmORFinder → smORF candidates
+   │
+   └── Fungal / Eukaryotic contigs
+          │
+          └─ MetaEuk → predicted proteins
+
+All predicted peptides
+   │
+   ▼
+peptides_all.faa
+   │
+   ▼
+predicted_smorfs.tsv
+   │
+   ▼
+Macrel AMP prediction
+   │
+   ▼
+predicted_smorfs.with_macrel.tsv
+</pre>
 ---
 
 <pre>
@@ -49,8 +97,9 @@ STRUCTURE
    run_libsQC.sh                           - QC logic (FastQC, NanoPlot, NanoStat, SeqKit)
    submit_metaflye_array.sh                - Flye Slurm array submission
    metaflye_array_task.sh                  - Per-array Flye runner (scratch-aware)
-   run_smorfs_pipeline.sh                  - smORF discovery pipeline
+   run_smorfs_pipeline.sh                  - smORF + protein discovery pipeline
    smorfs_job.sh                           - Slurm wrapper for smORFs
+   metaeuk_job.sh                          - Slurm wrapper for MetaEuk annotation
    run_refine_annot_smorf_bacs.sh          - Bacterial refinement stage
    refine_bacs_job.sh                      - Slurm wrapper for refinement
    refine_bacs.py                          - Genomic-context refinement logic
@@ -140,6 +189,43 @@ Refinement is independent and can be run:
 
 If refinement is launched in the same run as smORFs,
 Slurm dependency is automatically enforced (afterok).
+</pre>
+
+<pre>
+EUKARYOTIC / FUNGAL PROTEIN DISCOVERY
+-------------------------------------
+
+Eukaryotic contigs are processed separately from bacterial contigs.
+
+Instead of gene modeling pipelines designed for complete genomes
+(e.g. Funannotate), the pipeline uses MetaEuk, which is designed
+for fragmented metagenomic assemblies.
+
+Workflow:
+
+  fungi_contigs.fasta
+       │
+       ▼
+  MetaEuk prediction
+       │
+       ├─ metaeuk_preds.fas          (predicted proteins)
+       └─ metaeuk_preds.codon.fas    (coding sequences)
+
+Predicted proteins are integrated into:
+
+  peptides_all.faa
+  predicted_smorfs.tsv
+
+Because fungal smORF discovery tools are not yet mature,
+short proteins are treated as smORF candidates if:
+
+  peptide_length ≤ 100 aa
+
+These candidates are subsequently evaluated by:
+
+  • Macrel AMP prediction
+  • global recurrence analysis
+  • ecological distribution
 </pre>
 
 <pre>
@@ -250,11 +336,12 @@ Two AMP prediction strategies are supported:
        predicted_smorfs.with_macrel.tsv
 
 Macrel fields added:
-  amp_pred
-  amp_prob
-  hemo_pred
-  hemo_prob
-  macrel_class
+
+  amp_pred        predicted antimicrobial peptide
+  amp_prob        probability of AMP activity
+  hemo_pred       predicted hemolytic activity
+  hemo_prob       probability of hemolysis
+  macrel_class    structural AMP class (if detected)
 </pre>
 
 ---
@@ -284,6 +371,13 @@ Refinement (Bacterial):
   --refine-bacs-sample STR
   --refine-bacs-samples FILE
   --refine-bacs-create-env
+
+MetaEuk (Eukaryotic Proteins):
+  --metaeuk-only
+  --run-metaeuk
+  --metaeuk-sample STR
+  --metaeuk-samples FILE
+  --metaeuk-db PATH
 
 Downstream:
   --downstream-only
@@ -410,6 +504,15 @@ bash workflow/runall.sh --downstream-only
 
 # 13) Full downstream (metrics + AMP utilities)
 bash workflow/runall.sh --downstream-full
+
+FUNGAL / EUKARYOTIC PROTEIN DISCOVERY
+-------------------------------------
+
+# 14) Run MetaEuk on fungal contigs
+bash workflow/runall.sh \
+  --metaeuk-only \
+  --metaeuk-sample PENEIRA_GLOBAL \
+  --metaeuk-db /path/to/euk_protein_db.faa
 </pre>
 
 ---
