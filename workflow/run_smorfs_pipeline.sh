@@ -59,6 +59,8 @@ MAX_SMO_RF_AA="${MAX_SMO_RF_AA:-100}"  # define "smORF" threshold for the table 
 # If empty, funannotate may still run but often complains.
 FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR:-}"
 
+METAEUK_DB="${METAEUK_DB:-}"
+METAEUK_MIN_AA="${METAEUK_MIN_AA:-20}"
 # ---------------------------
 # Helpers
 # ---------------------------
@@ -120,11 +122,11 @@ ensure_env_once() {
 
     "${installer}" config set channel_priority strict >/dev/null 2>&1 || true
 
-    "${installer}" create -y -p "${ENV_PREFIX}" --override-channels \
+		"${installer}" create -y -p "${ENV_PREFIX}" --override-channels \
       -c conda-forge -c bioconda \
       python=3.8 \
       tiara=1.0.3 \
-      funannotate \
+      metaeuk \
       prodigal \
       mmseqs2 \
       seqkit \
@@ -158,17 +160,14 @@ ensure_env_once() {
 }
 
 ensure_smorfs_tools() {
-  # Must be inside the activated env already
-  msg "Ensuring SmORFinder (smorf) and funannotate are installed..."
+  msg "Ensuring SmORFinder + MetaEuk are installed..."
 
-  # --- funannotate: MUST come from conda, not pip ---
-  if ! command -v funannotate >/dev/null 2>&1; then
-    die "funannotate not found. Install it via conda when creating the env (recommended). Refusing to pip-install because it can break numpy/tiara."
+  if ! command -v metaeuk >/dev/null 2>&1; then
+    die "metaeuk not found in env."
   else
-    msg "funannotate found"
+    msg "metaeuk found"
   fi
 
-  # --- SmORFinder: allow pip but forbid dependency changes ---
   if ! command -v smorf >/dev/null 2>&1; then
     msg "smorf not found -> installing SmORFinder via pip (--no-deps)"
     python -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
@@ -177,22 +176,11 @@ ensure_smorfs_tools() {
     msg "smorf found"
   fi
 
-  msg "Checking tensorflow import (optional)..."
-  if python -c "import tensorflow as tf; print(tf.__version__)" >/dev/null 2>&1; then
-    msg "tensorflow OK"
-  else
-    msg "tensorflow not present in this env (expected if using separate SmORFinder env)."
-  fi
+  command -v metaeuk >/dev/null 2>&1 || die "metaeuk still not found."
+  command -v smorf   >/dev/null 2>&1 || die "smorf still not found after pip install."
 
-
-  # Final hard checks
-  command -v funannotate >/dev/null 2>&1 || die "funannotate still not found."
-  command -v smorf >/dev/null 2>&1 || die "smorf still not found after pip install."
-
-  # Extra: protect yourself—show numpy version so logs prove it didn't change
   msg "numpy version: $(python -c 'import numpy as np; print(np.__version__)')"
-
-  msg "smorf + funannotate are ready."
+  msg "MetaEuk + smorf are ready."
 }
 
 is_probably_nt_fasta() {
@@ -497,88 +485,46 @@ run_smorfinder_bac() {
   fi
 }
 
-# ---------------------------
-# 6) Run funannotate (fungal bucket) + flag <=100 aa peptides
-# ---------------------------
-run_funannotate_fungi() {
+run_metaeuk_fungi() {
   local sample_id="$1"
   local fungi_fa="$2"
   local outdir="$3"
 
-  mkdirp "${outdir}/fungi"
+  mkdirp "${outdir}/fungi/metaeuk"
+
   if [[ ! -s "${fungi_fa}" ]]; then
-    msg "[${sample_id}] No fungal/euk contigs FASTA found (empty). Skipping funannotate."
+    msg "[${sample_id}] No fungal/euk contigs FASTA found. Skipping MetaEuk."
     return 0
   fi
 
-  # Require FUNANNOTATE_DB (otherwise predict will fail later)
-  if [[ -n "${FUNANNOTATE_DB_DIR}" ]]; then
-    export FUNANNOTATE_DB="${FUNANNOTATE_DB_DIR}"
-  fi
-  if [[ -z "${FUNANNOTATE_DB:-}" ]]; then
-    msg "[${sample_id}] WARNING: FUNANNOTATE_DB is not set; skipping funannotate."
-    return 0
-  fi
-  msg "[${sample_id}] FUNANNOTATE_DB=${FUNANNOTATE_DB}"
+  [[ -n "${METAEUK_DB}" ]] || die "[${sample_id}] METAEUK_DB is not set."
+  [[ -e "${METAEUK_DB}" ]] || die "[${sample_id}] METAEUK_DB not found: ${METAEUK_DB}"
 
-  # If "fungi bucket" is extremely small, funannotate/BUSCO training often fails/crashes.
-  # Skip predict in that case (still keep the split contigs outputs).
-  local fungi_bp
-  fungi_bp="$(seqkit stats -T "${fungi_fa}" 2>/dev/null | awk 'NR==2{print $5}')"
-  fungi_bp="${fungi_bp:-0}"
-  if [[ "${fungi_bp}" -lt 1000000 ]]; then
-    msg "[${sample_id}] NOTE: fungi_contigs total_bp=${fungi_bp} (<1,000,000 bp). Too small for funannotate/BUSCO; skipping funannotate predict."
-    return 0
-  fi
+  local prefix="${outdir}/fungi/metaeuk/metaeuk_preds"
+  local tmpdir="${outdir}/fungi/metaeuk/tmp"
 
-  msg "[${sample_id}] Running funannotate mask (softmask repeats)"
-  mkdir -p "${outdir}/fungi/mask"
-  local masked_fa="${outdir}/fungi/mask/fungi_contigs.masked.fasta"
-  funannotate mask \
-    -i "${fungi_fa}" \
-    -o "${masked_fa}" \
-    > "${outdir}/fungi/mask/funannotate.mask.stdout.log" \
-    2> "${outdir}/fungi/mask/funannotate.mask.stderr.log" || true
+  rm -rf "${tmpdir}"
+  mkdir -p "${tmpdir}"
 
-  # Use masked fasta if it exists, otherwise fall back to input
-  local predict_input="${fungi_fa}"
-  if [[ -s "${masked_fa}" ]]; then
-    predict_input="${masked_fa}"
-  else
-    msg "[${sample_id}] WARNING: masked fasta not created; using unmasked input for predict (may fail unless --force)."
-  fi
+  msg "[${sample_id}] Running MetaEuk on fungal/euk contigs"
+  metaeuk easy-predict \
+    "${fungi_fa}" \
+    "${METAEUK_DB}" \
+    "${prefix}" \
+    "${tmpdir}" \
+    --threads "${CPUS}" \
+    --min-length "${METAEUK_MIN_AA}" \
+    > "${outdir}/fungi/metaeuk/metaeuk.stdout.log" \
+    2> "${outdir}/fungi/metaeuk/metaeuk.stderr.log"
 
-  msg "[${sample_id}] Running funannotate predict"
-  local predict_ok=0
-  funannotate predict \
-    -i "${predict_input}" \
-    -o "${outdir}/fungi/funannotate_out" \
-    --species "Fungus_sp_${sample_id}" \
-    --cpus "${CPUS}" \
-    --force \
-    > "${outdir}/fungi/funannotate.predict.stdout.log" \
-    2> "${outdir}/fungi/funannotate.predict.stderr.log" || predict_ok=$?
-
-  if [[ "${predict_ok}" -ne 0 ]]; then
-    msg "[${sample_id}] WARNING: funannotate predict failed (exit=${predict_ok}). Skipping fungal peptide extraction."
+  if [[ ! -s "${prefix}.fas" ]]; then
+    msg "[${sample_id}] WARNING: MetaEuk produced no protein FASTA (${prefix}.fas)."
     return 0
   fi
 
-  # Find predicted proteins FASTA (per funannotate docs, often under predict_results and named *.proteins.fa)
-  msg "[${sample_id}] Locating funannotate predicted proteins FASTA"
-  local prot_fa
-  prot_fa="$(find "${outdir}/fungi/funannotate_out" -maxdepth 6 -type f \
-              \( -iname "*proteins*.fa" -o -iname "*proteins*.faa" -o -iname "*.proteins.fa" -o -iname "*.proteins.faa" \) \
-              | head -n 1 || true)"
-
-  if [[ -z "${prot_fa}" || ! -s "${prot_fa}" ]]; then
-    msg "[${sample_id}] WARNING: Could not find a proteins FASTA under funannotate output. Check predict logs."
-    return 0
-  fi
-
-  msg "[${sample_id}] Flagging fungal peptides <= ${MAX_FUNGAL_PEPTIDE_AA} aa from: ${prot_fa}"
-  seqkit seq -M "${MAX_FUNGAL_PEPTIDE_AA}" "${prot_fa}" \
-    > "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa"
+  # Short fungal/euk proteins for NR catalog
+  seqkit seq -M "${MAX_FUNGAL_PEPTIDE_AA}" "${prefix}.fas" \
+    > "${outdir}/fungi/metaeuk/metaeuk_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa"
 }
 
 # ---------------------------
@@ -608,8 +554,8 @@ create_nonredundant_catalog() {
     cat "${outdir}/bac/smorfinder/smorf_output/smorf_output.faa" >> "${pooled}"
   fi
 
-  if [[ -s "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" ]]; then
-    cat "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" >> "${pooled}"
+  if [[ -s "${outdir}/fungi/metaeuk/metaeuk_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" ]]; then
+    cat "${outdir}/fungi/metaeuk/metaeuk_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" >> "${pooled}"
   fi
 
   # If pooled is empty, skip.
@@ -696,24 +642,12 @@ finalize_step2_catalog_and_table() {
     cat "${outdir}/bac/smorfinder/smorf_output/smorf_output.faa" >> "${peptides_all}"
   fi
 
-  # 3) Funannotate proteins (ONLY if RUN_FUNANNOTATE=1)
-  if [[ "${RUN_FUNANNOTATE:-0}" -eq 1 ]]; then
-
-    local fun_prot_full
-    fun_prot_full="$(find "${outdir}/fungi/funannotate_out" -maxdepth 5 -type f \
-      \( -iname "*proteins*.fa" -o -iname "*proteins*.faa" -o -iname "*protein*.fa" -o -iname "*protein*.faa" \) \
-      | head -n 1 || true)"
-
-    if [[ -n "${fun_prot_full}" && -s "${fun_prot_full}" ]]; then
-      msg "[${sample_id}] Appending funannotate proteins: ${fun_prot_full}"
-      cat "${fun_prot_full}" >> "${peptides_all}"
-    elif [[ -s "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" ]]; then
-      msg "[${sample_id}] Appending funannotate peptides <=${MAX_FUNGAL_PEPTIDE_AA}aa"
-      cat "${outdir}/fungi/fungi_le_${MAX_FUNGAL_PEPTIDE_AA}aa.faa" >> "${peptides_all}"
-    fi
-
+  # 3) MetaEuk proteins (fungi/euk branch)
+  if [[ -s "${outdir}/fungi/metaeuk/metaeuk_preds.fas" ]]; then
+    msg "[${sample_id}] Appending MetaEuk proteins"
+    cat "${outdir}/fungi/metaeuk/metaeuk_preds.fas" >> "${peptides_all}"
   else
-    msg "[${sample_id}] RUN_FUNANNOTATE=0 → skipping funannotate proteins"
+    msg "[${sample_id}] NOTE: no MetaEuk protein FASTA found."
   fi
 
   # ---- cds_all.fna (NT) ----
@@ -727,24 +661,11 @@ finalize_step2_catalog_and_table() {
     cat "${outdir}/bac/smorfinder/smorf_output/smorf_output.ffn" >> "${cds_all}"
   fi
 
-  # 3) Funannotate CDS NT (ONLY if RUN_FUNANNOTATE=1)
-  if [[ "${RUN_FUNANNOTATE:-0}" -eq 1 ]]; then
-
-    local fun_cds
-    fun_cds="$(find "${outdir}/fungi/funannotate_out" -maxdepth 6 -type f \
-      \( -iname "*cds*.fa" -o -iname "*cds*.fna" -o -iname "*transcripts*.fa" -o -iname "*transcripts*.fna" \) \
-      | head -n 1 || true)"
-
-    if [[ -n "${fun_cds}" && -s "${fun_cds}" ]]; then
-      if is_probably_nt_fasta "${fun_cds}"; then
-        cat "${fun_cds}" >> "${cds_all}"
-      else
-        msg "[${sample_id}] NOTE: funannotate candidate NT file is not NT-like, skipping: ${fun_cds}"
-      fi
-    fi
-
+  # 3) MetaEuk coding sequences (fungi/euk branch)
+  if [[ -s "${outdir}/fungi/metaeuk/metaeuk_preds.codon.fas" ]]; then
+    cat "${outdir}/fungi/metaeuk/metaeuk_preds.codon.fas" >> "${cds_all}"
   else
-    msg "[${sample_id}] RUN_FUNANNOTATE=0 → skipping funannotate CDS"
+    msg "[${sample_id}] NOTE: no MetaEuk codon FASTA found."
   fi
 
   # If either is empty, keep the file but note it in logs
@@ -824,29 +745,37 @@ finalize_step2_catalog_and_table() {
       aa_len=length(aaseq);
       is_smorF=(aa_len<=MAXAA ? "TRUE" : "FALSE");
 
-      # contig_id logic:
-      # - Prodigal: contig is fid with trailing _<num> stripped
-      # - SmORFinder: contig comes from smorf GFF-derived map (feature_id -> contig_id)
+      # contig_id logic + source assignment
+      # Priority:
+      # 1) SmORFinder map
+      # 2) MetaEuk header parsing
+      # 3) Prodigal trailing _<num> pattern
       contig=""
+      src="mixed"
+
+      # MetaEuk headers usually contain "|" fields.
+      # We will try to recover contig_id from the 2nd field.
+      # Example assumption:
+      #   something|contig_123|...
+      if (index(fid, "|") > 0) {
+        n = split(fid, a, "|")
+        if (n >= 2) {
+          contig = a[2]
+          src = "metaeuk"
+        }
+      }
+
+      # SmORFinder has higher priority if feature_id is in smorf2contig
       if (fid in smorf2contig) {
         contig = smorf2contig[fid]
-      } else if (fid ~ /_[0-9]+$/) {
-        contig=fid
+        src = "smorfinder"
+      } else if (src != "metaeuk" && fid ~ /_[0-9]+$/) {
+        contig = fid
         sub(/_[0-9]+$/, "", contig)
+        src = "prodigal"
       }
 
       tl = (contig != "" && (contig in label) ? label[contig] : "")
-
-      src="mixed"
-
-      # Highest priority: SmORFinder map
-      if (fid in smorf2contig) {
-        src="smorfinder"
-      } else if (fid ~ /_[0-9]+$/) {
-        src="prodigal"
-      } else if (fid ~ /FUN_/ || fid ~ /_T[0-9]+$/) {
-        src="funannotate"
-      }
 
       ntseq = (fid in nt ? nt[fid] : "");
       nt_len = (ntseq=="" ? 0 : length(ntseq));
@@ -875,15 +804,27 @@ run_one_sample() {
   classify_contigs_tiara         "${sample_id}" "${asm_fa}" "${outdir}"
   run_prodigal_bac              "${sample_id}" "${outdir}/contigs/bac_contigs.fasta"   "${outdir}"
   run_smorfinder_bac            "${sample_id}" "${outdir}/contigs/bac_contigs.fasta"   "${outdir}"
-  if [[ "${RUN_FUNANNOTATE}" -eq 1 ]]; then
-    run_funannotate_fungi "${sample_id}" "${outdir}/contigs/fungi_contigs.fasta" "${outdir}"
-  else
-    msg "[${sample_id}] Skipping funannotate (RUN_FUNANNOTATE=0)"
-  fi
+  msg "[${sample_id}] Skipping MetaEuk in main smORFs run (run separately with --run-metaeuk)"
   create_nonredundant_catalog   "${sample_id}" "${outdir}"
   finalize_step2_catalog_and_table "${sample_id}" "${outdir}"
 
   msg "[${sample_id}] DONE"
+}
+
+run_one_sample_metaeuk() {
+  local sample_id="$1"
+  local outdir="${RESULTS_DIR}/${sample_id}"
+  local fungi_fa="${outdir}/contigs/fungi_contigs.fasta"
+
+  [[ -s "${fungi_fa}" ]] || die "Missing fungi/euk contigs for sample '${sample_id}': ${fungi_fa}"
+
+  run_metaeuk_fungi "${sample_id}" "${fungi_fa}" "${outdir}"
+
+  # Rebuild catalogs/tables after MetaEuk
+  create_nonredundant_catalog "${sample_id}" "${outdir}"
+  finalize_step2_catalog_and_table "${sample_id}" "${outdir}"
+
+  msg "[${sample_id}] MetaEuk + catalog rebuild DONE"
 }
 
 # ---------------------------
@@ -895,21 +836,19 @@ Usage:
   workflow/run_smorfs_pipeline.sh --create-env
   workflow/run_smorfs_pipeline.sh --run --sample TS-0500 --cpus 8
   workflow/run_smorfs_pipeline.sh --run --samples-file samples.txt --cpus 16
+  workflow/run_smorfs_pipeline.sh --run-metaeuk --sample TS-0500 --cpus 8
 
 Notes:
   - Expects MetaFlye assembly at: ${ASSEMBLY_ROOT}/<sample_id>/assembly.fasta
-  - Appends to:
-      ${RESULTS_DIR}/assembly_stats.tsv
-      ${RESULTS_DIR}/contig_stats.tsv
-  - Optional (recommended) funannotate DB:
-      export FUNANNOTATE_DB_DIR=/path/to/funannotate_db
-      funannotate setup -d \$FUNANNOTATE_DB_DIR
+  - MetaEuk expects fungi contigs already split at:
+      ${RESULTS_DIR}/<sample_id>/contigs/fungi_contigs.fasta
 
 Args:
   --create-env
   --run
+  --run-metaeuk
   --sample <id>
-  --samples-file <file>     (one sample_id per line)
+  --samples-file <file>
   --cpus <int>              (default: ${CPUS})
   --min-contig-bp <int>     (default: ${MIN_CONTIG_BP})
   --max-fungal-aa <int>     (default: ${MAX_FUNGAL_PEPTIDE_AA})
@@ -925,6 +864,7 @@ while [[ $# -gt 0 ]]; do
     --create-env) MODE="create-env"; shift ;;
     --ensure-env) MODE="ensure-env"; shift ;;
     --run)        MODE="run"; shift ;;
+    --run-metaeuk) MODE="run-metaeuk"; shift ;;
     --sample)     SAMPLE="${2:-}"; shift 2 ;;
     --samples-file) SAMPLES_FILE="${2:-}"; shift 2 ;;
     --cpus)       CPUS="${2:-}"; shift 2 ;;
@@ -963,18 +903,33 @@ need_cmd prodigal
 need_cmd mmseqs
 need_cmd tiara
 need_cmd smorf
-if [[ "${RUN_FUNANNOTATE}" -eq 1 ]]; then
-  need_cmd funannotate
-fi
+need_cmd metaeuk
 
-if [[ -n "${SAMPLE}" ]]; then
-  run_one_sample "${SAMPLE}"
-elif [[ -n "${SAMPLES_FILE}" ]]; then
-  [[ -f "${SAMPLES_FILE}" ]] || die "Samples file not found: ${SAMPLES_FILE}"
-  while read -r sid; do
-    [[ -z "${sid}" ]] && continue
-    run_one_sample "${sid}"
-  done < "${SAMPLES_FILE}"
+if [[ "${MODE}" == "run" ]]; then
+  if [[ -n "${SAMPLE}" ]]; then
+    run_one_sample "${SAMPLE}"
+  elif [[ -n "${SAMPLES_FILE}" ]]; then
+    [[ -f "${SAMPLES_FILE}" ]] || die "Samples file not found: ${SAMPLES_FILE}"
+    while read -r sid; do
+      [[ -z "${sid}" ]] && continue
+      run_one_sample "${sid}"
+    done < "${SAMPLES_FILE}"
+  else
+    die "Provide --sample <id> or --samples-file <file>"
+  fi
+elif [[ "${MODE}" == "run-metaeuk" ]]; then
+  [[ -n "${METAEUK_DB}" ]] || die "METAEUK_DB must be set for --run-metaeuk"
+  if [[ -n "${SAMPLE}" ]]; then
+    run_one_sample_metaeuk "${SAMPLE}"
+  elif [[ -n "${SAMPLES_FILE}" ]]; then
+    [[ -f "${SAMPLES_FILE}" ]] || die "Samples file not found: ${SAMPLES_FILE}"
+    while read -r sid; do
+      [[ -z "${sid}" ]] && continue
+      run_one_sample_metaeuk "${sid}"
+    done < "${SAMPLES_FILE}"
+  else
+    die "Provide --sample <id> or --samples-file <file>"
+  fi
 else
-  die "Provide --sample <id> or --samples-file <file>"
+  die "Unsupported MODE: ${MODE}"
 fi
