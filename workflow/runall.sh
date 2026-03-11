@@ -92,6 +92,14 @@ MIN_SEQ_ID="0.95"
 MMSEQS_COV="0.8"
 MMSEQS_COV_MODE="1"
 
+# Optional MetaEuk annotation for fungal/euk contigs (OFF by default)
+RUN_METAEUK=0
+METAEUK_ENV="${SMORFS_ENV:-smorfs_amps_env}"   # same env as smORFs pipeline
+METAEUK_SAMPLES_FILE="metadata/sample_ids.txt"
+METAEUK_SAMPLE_ID=""
+METAEUK_DB=""
+METAEUK_JOB_ID=""
+
 usage() {
   echo "Usage: bash workflow/runall.sh [options]"
   echo
@@ -143,6 +151,12 @@ usage() {
   echo "  --smorfs-create-env   Create smORFs conda env and exit"
   echo "  --smorfs-env STR      Conda env name for smORFs pipeline (default: smorfs_amps_env)"
   echo "  --funannotate-db PATH Funannotate DB dir (export FUNANNOTATE_DB_DIR)"
+  echo "MetaEuk (fungi/euk contigs):"
+  echo "  --metaeuk-only            Run only MetaEuk annotation on existing fungi_contigs.fasta"
+  echo "  --run-metaeuk             Run MetaEuk stage in addition to selected steps"
+  echo "  --metaeuk-sample STR      Run MetaEuk for ONE SampleID only"
+  echo "  --metaeuk-samples FILE    Run MetaEuk for SampleIDs in FILE (one per line)"
+  echo "  --metaeuk-db PATH         Protein reference DB/FASTA for MetaEuk (required)"
   echo "Clustering (MMseqs2):"
   echo "  --mmseqs-global-only      Build global peptides FASTA + run MMseqs2 clustering"
   echo "  --run-mmseqs-global       Run MMseqs2 global clustering in addition to selected steps"
@@ -312,6 +326,22 @@ while [[ $# -gt 0 ]]; do
       --mmseqs-cov) MMSEQS_COV="$2"; shift 2 ;;
       --mmseqs-cov-mode) MMSEQS_COV_MODE="$2"; shift 2 ;;
 
+      # ---- MetaEuk options ----
+      --metaeuk-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_METAEUK=1
+        shift 1
+        ;;
+      --run-metaeuk) RUN_METAEUK=1; shift 1 ;;
+      --metaeuk-sample) METAEUK_SAMPLE_ID="$2"; shift 2 ;;
+      --metaeuk-samples) METAEUK_SAMPLES_FILE="$2"; shift 2 ;;
+      --metaeuk-db) METAEUK_DB="$2"; shift 2 ;;
+
     *) echo "Unknown argument: $1"; usage ;;
   esac
 done
@@ -365,6 +395,8 @@ RUN_PWD="$(pwd)"
   echo "  FUNANNOTATE_DB  : ${FUNANNOTATE_DB_DIR:-<unset>}"
   echo "  RUN_DOWNSTREAM : ${RUN_DOWNSTREAM}"
   echo "  METRICS_ENV    : ${METRICS_ENV}"
+  echo "  RUN_METAEUK     : ${RUN_METAEUK}"
+  echo "  METAEUK_DB      : ${METAEUK_DB:-<unset>}"
   echo "============================================"
   echo
 } | tee -a "$OUT_LOG" "$ERR_LOG" "$CMD_LOG"
@@ -492,6 +524,47 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
   )
 
   echo ">>> smORFs submitted as job ${SMORFS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+fi
+
+if [[ "${RUN_METAEUK}" -eq 1 ]]; then
+  [[ -n "${METAEUK_DB}" ]] || { echo "ERROR: --metaeuk-db is required for MetaEuk runs."; exit 1; }
+
+  METAEUK_OUT_LOG="logs/metaeuk_submit_${TS}.out"
+  METAEUK_ERR_LOG="logs/metaeuk_submit_${TS}.err"
+
+  echo ">>> Submitting MetaEuk job ..." | tee -a "$OUT_LOG" "$CMD_LOG"
+
+  METAEUK_RUN_ARGS="--samples-file ${METAEUK_SAMPLES_FILE}"
+  if [[ -n "${METAEUK_SAMPLE_ID}" ]]; then
+    METAEUK_RUN_ARGS="--sample ${METAEUK_SAMPLE_ID}"
+    echo ">>> MetaEuk will run for ONE SampleID only: ${METAEUK_SAMPLE_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  else
+    echo ">>> MetaEuk will run for SampleIDs in: ${METAEUK_SAMPLES_FILE}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  fi
+
+  METAEUK_DEP=()
+  if [[ -n "${SMORFS_JOB_ID:-}" ]]; then
+    METAEUK_DEP+=( --dependency="afterok:${SMORFS_JOB_ID}" )
+  fi
+
+  METAEUK_JOB_ID=$(sbatch \
+    "${METAEUK_DEP[@]}" \
+    --partition="${PARTITION}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="${CPUS}" \
+    --mem="${MEM}" \
+    --time="${TIME}" \
+    --chdir="${WDIR}" \
+    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",SMORFS_ENV="${SMORFS_ENV}",METAEUK_DB="${METAEUK_DB}",METAEUK_RUN_ARGS="${METAEUK_RUN_ARGS}" \
+    --output="${METAEUK_OUT_LOG}" \
+    --error="${METAEUK_ERR_LOG}" \
+    workflow/metaeuk_job.sh \
+    | awk '{print $NF}'
+  )
+
+  echo ">>> MetaEuk submitted as job ${METAEUK_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  echo ">>> MetaEuk logs: ${METAEUK_OUT_LOG} / ${METAEUK_ERR_LOG}" | tee -a "$OUT_LOG" "$CMD_LOG"
 fi
 
 if [[ "${RUN_MMSEQS_GLOBAL}" -eq 1 ]]; then
