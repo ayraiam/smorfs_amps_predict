@@ -211,6 +211,13 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         if extra in df.columns:
             keep.append(extra)
 
+    df["peptide_seq"] = (
+        df["peptide_seq"]
+        .astype(str)
+        .str.strip()
+        .str.rstrip("*")
+    )
+
     return df[keep]
 
 
