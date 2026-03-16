@@ -35,7 +35,9 @@ Oxford Nanopore shotgun metagenomic data, providing a modular framework for:
    • Eukaryotic/fungal proteins via MetaEuk
   4) AMP prediction via Macrel
    • Supports bacterial/archaeal/prokarya and fungal peptides
-  5) Bacterial smORF refinement based on genomic context
+  5) smORF refinement based on genomic context
+   • bacterial refinement (Prodigal context)
+   • fungal/euk refinement (MetaEuk context)
   6) Downstream assembly metrics + visualization
 
 All major stages are explicitly decoupled:
@@ -79,7 +81,14 @@ All predicted peptides
 peptides_all.faa
    │
    ▼
-predicted_smorfs.tsv
+predicted_smorfs.with_macrel.tsv
+   │
+   ├─ Bacterial refinement
+   │
+   └─ Fungal refinement
+        │
+        ▼
+Refined smORF catalog
    │
    ▼
 Macrel AMP prediction
@@ -192,6 +201,47 @@ Slurm dependency is automatically enforced (afterok).
 </pre>
 
 <pre>
+FUNGAL / EUKARYOTIC smORF REFINEMENT
+------------------------------------
+
+Fungal/eukaryotic candidates derived from MetaEuk predictions
+can also undergo a refinement stage analogous to bacterial smORF
+context evaluation.
+
+This stage integrates:
+
+  • MetaEuk GFF annotations
+  • Fungal contig FASTA
+  • Global MMseqs recurrence statistics
+
+Three refinement layers are evaluated:
+
+Step 1 — Contig-edge artifact detection
+  • Coordinates are parsed from MetaEuk feature_id
+  • dist_left / dist_right
+  • flag_edge
+
+Step 2 — Overlap with MetaEuk CDS annotations
+  • host_cds_id
+  • flag_overlap_fraction
+  • host_cds_id_embedded
+  • flag_embedded
+
+Step 3 — Global structural recurrence
+  • cluster_id
+  • cluster_size
+  • cluster_env_count
+  • flag_cluster_recurrent
+  • flag_cross_environment
+
+Unlike bacterial refinement, fungal refinement does not rely on
+Prodigal annotations and instead uses MetaEuk-derived gene models.
+
+All three steps are independently runnable through the main
+workflow launcher (runall.sh).
+</pre>
+
+<pre>
 EUKARYOTIC / FUNGAL PROTEIN DISCOVERY
 -------------------------------------
 
@@ -216,6 +266,22 @@ Predicted proteins are integrated into:
   peptides_all.faa
   predicted_smorfs.tsv
 
+MetaEuk feature identifiers encode genomic coordinates directly.
+
+Example:
+
+  UniRef50_A0A820GSM0|contig_6867|-|74|1.83e-12|1|4211|4321|...
+
+From this identifier the pipeline extracts:
+
+  contig = contig_6867
+  strand = -
+  start  = 4211
+  end    = 4321
+
+These coordinates are used during fungal refinement to evaluate
+contig-edge artifacts and overlaps with MetaEuk CDS annotations.
+
 Because fungal smORF discovery tools are not yet mature,
 short proteins are treated as smORF candidates if:
 
@@ -233,7 +299,7 @@ GLOBAL CLUSTERING & RECURRENCE ANALYSIS
 ----------------------------------------
 
 The pipeline supports global peptide clustering across all environments
-to identify structurally recurrent smORFs.
+to identify structurally recurrent peptide features across ecosystems.
 
 Clustering workflow:
 
@@ -280,19 +346,25 @@ Cluster-only refinement mode:
     --refine-bacs-only \
     --cluster-only \
     --refine-bacs-sample PENEIRA_GLOBAL
+
+Note: MMseqs clustering is performed on the global pooled peptide catalog
+(peptides_all_global.faa). This catalog may contain peptides originating
+from both bacterial smORF predictions and fungal/eukaryotic MetaEuk
+proteins. Therefore recurrence statistics represent global peptide
+similarity patterns rather than fungi-only clustering.
 </pre>
 
 <pre>
 REFINEMENT LOGIC OVERVIEW
 -------------------------
 
-Refinement proceeds in structured layers:
+Refinement (bacterial and fungal) proceeds in structured layers:
 
 Step 1 — Contig-edge artifact detection
   • flag_edge
   • dist_left / dist_right
 
-Step 2 — Embedded-in-longer-CDS analysis
+Step 2 — Embedded / overlap analysis
   • flag_embedded
   • host_cds_id
   • flag_overlap_fraction
@@ -371,6 +443,16 @@ Refinement (Bacterial):
   --refine-bacs-sample STR
   --refine-bacs-samples FILE
   --refine-bacs-create-env
+
+Refinement (Fungal / Eukaryotic):
+  --refine-euks-only
+  --run-refine-euks
+  --refine-euks-sample STR
+  --refine-euks-samples FILE
+  --refine-euks-step1-only
+  --refine-euks-step2-only
+  --refine-euks-step3-only
+  --refine-euks-steps STR
 
 MetaEuk (Eukaryotic Proteins):
   --metaeuk-only
@@ -505,17 +587,34 @@ bash workflow/runall.sh --downstream-only
 # 13) Full downstream (metrics + AMP utilities)
 bash workflow/runall.sh --downstream-full
 
-FUNGAL / EUKARYOTIC PROTEIN DISCOVERY
--------------------------------------
+FUNGAL REFINEMENT
+-----------------
 
-# 14) Run MetaEuk on fungal contigs
+# 14) Full fungal refinement (Steps 1–3)
 bash workflow/runall.sh \
-  --metaeuk-only \
-  --metaeuk-sample PENEIRA_GLOBAL \
-  --metaeuk-db /path/to/euk_protein_db.faa
-</pre>
+  --refine-euks-only \
+  --refine-euks-sample PENEIRA_GLOBAL
+
+# 15) Run fungal Step 1 only
+bash workflow/runall.sh \
+  --refine-euks-only \
+  --refine-euks-step1-only \
+  --refine-euks-sample PENEIRA_GLOBAL
+
+# 16) Run fungal Step 2 only
+bash workflow/runall.sh \
+  --refine-euks-only \
+  --refine-euks-step2-only \
+  --refine-euks-sample PENEIRA_GLOBAL
+
+# 17) Run fungal Step 3 only
+bash workflow/runall.sh \
+  --refine-euks-only \
+  --refine-euks-step3-only \
+  --refine-euks-sample PENEIRA_GLOBAL</pre>
 
 ---
+</pre>
 
 <pre>
 CITATION
