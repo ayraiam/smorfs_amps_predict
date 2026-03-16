@@ -100,6 +100,18 @@ METAEUK_SAMPLE_ID=""
 METAEUK_DB=""
 METAEUK_JOB_ID=""
 
+#Refining Euk annotations
+RUN_REFINE_EUKS=0
+REFINE_EUKS_CREATE_ENV=0
+REFINE_EUKS_ENV="refine_annot_smorf_euks_env"
+REFINE_EUKS_SAMPLES_FILE="metadata/sample_ids.txt"
+REFINE_EUKS_SAMPLE_ID=""
+REFINE_EUKS_INPUT_TSV=""
+REFINE_EUKS_JOB_ID=""
+REFINE_EUKS_STEP1=1
+REFINE_EUKS_STEP2=1
+REFINE_EUKS_STEP3=1
+
 usage() {
   echo "Usage: bash workflow/runall.sh [options]"
   echo
@@ -157,6 +169,18 @@ usage() {
   echo "  --metaeuk-sample STR      Run MetaEuk for ONE SampleID only"
   echo "  --metaeuk-samples FILE    Run MetaEuk for SampleIDs in FILE (one per line)"
   echo "  --metaeuk-db PATH         Protein reference DB/FASTA for MetaEuk (required)"
+  echo "Refine (fungi/euks):"
+  echo "  --refine-euks-only         Submit fungal/euk refinement only"
+  echo "  --run-refine-euks          Run fungal/euk refine stage in addition to selected steps"
+  echo "  --refine-euks-sample STR   Run fungal/euk refine for ONE SampleID only"
+  echo "  --refine-euks-samples FILE Run fungal/euk refine for SampleIDs in FILE"
+  echo "  --refine-euks-create-env   Create fungal/euk refine env and exit"
+  echo "  --refine-euks-env STR      Conda env name (default: refine_annot_smorf_euks_env)"
+  echo "  --refine-euks-input-tsv P  Optional override TSV path"
+  echo "  --refine-euks-step1-only    Run only fungal/euk Step 1"
+  echo "  --refine-euks-step2-only    Run only fungal/euk Step 2"
+  echo "  --refine-euks-step3-only    Run only fungal/euk Step 3"
+  echo "  --refine-euks-steps STR     Comma-separated fungal/euk steps (e.g. 1,2,3 or 1,3)"
   echo "Clustering (MMseqs2):"
   echo "  --mmseqs-global-only      Build global peptides FASTA + run MMseqs2 clustering"
   echo "  --run-mmseqs-global       Run MMseqs2 global clustering in addition to selected steps"
@@ -342,6 +366,54 @@ while [[ $# -gt 0 ]]; do
       --metaeuk-samples) METAEUK_SAMPLES_FILE="$2"; shift 2 ;;
       --metaeuk-db) METAEUK_DB="$2"; shift 2 ;;
 
+      --refine-euks-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=1
+        shift 1
+        ;;
+      --run-refine-euks) RUN_REFINE_EUKS=1; shift 1 ;;
+      --refine-euks-sample) REFINE_EUKS_SAMPLE_ID="$2"; shift 2 ;;
+      --refine-euks-samples) REFINE_EUKS_SAMPLES_FILE="$2"; shift 2 ;;
+      --refine-euks-create-env) REFINE_EUKS_CREATE_ENV=1; shift 1 ;;
+      --refine-euks-env) REFINE_EUKS_ENV="$2"; shift 2 ;;
+      --refine-euks-input-tsv) REFINE_EUKS_INPUT_TSV="$2"; shift 2 ;;
+
+      --refine-euks-step1-only)
+        REFINE_EUKS_STEP1=1
+        REFINE_EUKS_STEP2=0
+        REFINE_EUKS_STEP3=0
+        shift 1
+        ;;
+      --refine-euks-step2-only)
+        REFINE_EUKS_STEP1=0
+        REFINE_EUKS_STEP2=1
+        REFINE_EUKS_STEP3=0
+        shift 1
+        ;;
+      --refine-euks-step3-only)
+        REFINE_EUKS_STEP1=0
+        REFINE_EUKS_STEP2=0
+        REFINE_EUKS_STEP3=1
+        shift 1
+        ;;
+      --refine-euks-steps)
+        REFINE_EUKS_STEP1=0
+        REFINE_EUKS_STEP2=0
+        REFINE_EUKS_STEP3=0
+        IFS=',' read -ra _steps <<< "$2"
+        for s in "${_steps[@]}"; do
+          [[ "$s" == "1" ]] && REFINE_EUKS_STEP1=1
+          [[ "$s" == "2" ]] && REFINE_EUKS_STEP2=1
+          [[ "$s" == "3" ]] && REFINE_EUKS_STEP3=1
+        done
+        shift 2
+        ;;
+
     *) echo "Unknown argument: $1"; usage ;;
   esac
 done
@@ -420,6 +492,15 @@ if [[ "${REFINE_BACS_CREATE_ENV}" -eq 1 ]]; then
     --refine-env "${REFINE_BACS_ENV}" \
     >>"$OUT_LOG" 2>>"$ERR_LOG"
   echo ">>> Refine env creation complete. Exiting as requested (--refine-bacs-create-env)." | tee -a "$OUT_LOG" "$CMD_LOG"
+  exit 0
+fi
+
+if [[ "${REFINE_EUKS_CREATE_ENV}" -eq 1 ]]; then
+  echo ">>> Creating refine_euks env via workflow/run_refine_annot_smorf_euks.sh --create-env" | tee -a "$OUT_LOG" "$CMD_LOG"
+  /bin/bash workflow/run_refine_annot_smorf_euks.sh --create-env \
+    --refine-env "${REFINE_EUKS_ENV}" \
+    >>"$OUT_LOG" 2>>"$ERR_LOG"
+  echo ">>> Refine euks env creation complete. Exiting as requested (--refine-euks-create-env)." | tee -a "$OUT_LOG" "$CMD_LOG"
   exit 0
 fi
 
@@ -650,6 +731,57 @@ if [[ "${RUN_REFINE_BACS}" -eq 1 ]]; then
 
   echo ">>> refine_annot_smorf_bacs submitted as job ${REFINE_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
   echo ">>> refine logs: ${REFINE_OUT_LOG} / ${REFINE_ERR_LOG}" | tee -a "$OUT_LOG" "$CMD_LOG"
+fi
+
+if [[ "${RUN_REFINE_EUKS}" -eq 1 ]]; then
+  echo ">>> Submitting refine_annot_smorf_euks job ..." | tee -a "$OUT_LOG" "$CMD_LOG"
+
+  REFINE_EUKS_RUN_ARGS="--samples-file ${REFINE_EUKS_SAMPLES_FILE}"
+
+  if [[ -n "${REFINE_EUKS_SAMPLE_ID}" ]]; then
+    REFINE_EUKS_RUN_ARGS="--sample ${REFINE_EUKS_SAMPLE_ID}"
+    echo ">>> refine_euks will run for ONE SampleID only: ${REFINE_EUKS_SAMPLE_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  else
+    echo ">>> refine_euks will run for SampleIDs in: ${REFINE_EUKS_SAMPLES_FILE}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  fi
+
+  REFINE_EUKS_RUN_ARGS="${REFINE_EUKS_RUN_ARGS} --run-step1 ${REFINE_EUKS_STEP1} --run-step2 ${REFINE_EUKS_STEP2} --run-step3 ${REFINE_EUKS_STEP3}"
+
+  echo ">>> refine_euks steps: step1=${REFINE_EUKS_STEP1} step2=${REFINE_EUKS_STEP2} step3=${REFINE_EUKS_STEP3}" | tee -a "$OUT_LOG" "$CMD_LOG"
+
+  if [[ -n "${REFINE_EUKS_INPUT_TSV}" ]]; then
+    REFINE_EUKS_RUN_ARGS="${REFINE_EUKS_RUN_ARGS} --input-tsv ${REFINE_EUKS_INPUT_TSV}"
+  fi
+
+  REFINE_EUKS_OUT_LOG="logs/refine_euks_submit_${TS}.out"
+  REFINE_EUKS_ERR_LOG="logs/refine_euks_submit_${TS}.err"
+
+  REFINE_EUKS_DEP=()
+  if [[ -n "${METAEUK_JOB_ID:-}" ]]; then
+    REFINE_EUKS_DEP+=( --dependency="afterok:${METAEUK_JOB_ID}" )
+  fi
+  if [[ -n "${MM_JOB_ID:-}" ]]; then
+    REFINE_EUKS_DEP+=( --dependency="afterok:${MM_JOB_ID}" )
+  fi
+
+  REFINE_EUKS_JOB_ID=$(sbatch \
+    "${REFINE_EUKS_DEP[@]}" \
+    --partition="${PARTITION}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="${CPUS}" \
+    --mem="${MEM}" \
+    --time="${TIME}" \
+    --chdir="${WDIR}" \
+    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",REFINE_EUKS_ENV="${REFINE_EUKS_ENV}",REFINE_EUKS_RUN_ARGS="${REFINE_EUKS_RUN_ARGS}" \
+    --output="${REFINE_EUKS_OUT_LOG}" \
+    --error="${REFINE_EUKS_ERR_LOG}" \
+    workflow/refine_euks_job.sh \
+    | awk '{print $NF}'
+  )
+
+  echo ">>> refine_annot_smorf_euks submitted as job ${REFINE_EUKS_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
+  echo ">>> refine_euks logs: ${REFINE_EUKS_OUT_LOG} / ${REFINE_EUKS_ERR_LOG}" | tee -a "$OUT_LOG" "$CMD_LOG"
 fi
 
 if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
