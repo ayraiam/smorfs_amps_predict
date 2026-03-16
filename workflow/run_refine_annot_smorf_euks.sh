@@ -95,7 +95,11 @@ run_one_sample() {
     cluster_args=( --cluster-map "${cluster_map}" --env-label "${env_label}" )
   fi
 
-  local out_tsv="${sample_dir}/catalog/$(basename "${in_tsv%.tsv}").refined_euks.tsv"
+  local base="$(basename "${in_tsv}")"
+  base="${base%.refined_euks.tsv}"
+  base="${base%.tsv}"
+
+  local out_tsv="${sample_dir}/catalog/${base}.refined_euks.tsv"
 
   python workflow/refine_euks.py \
     --sample "${sample_id}" \
