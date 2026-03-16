@@ -215,7 +215,7 @@ step_c_macrel_attach_predicted_smorfs() {
 
   local peptides_faa="${outdir}/predicted_smorfs.peptides_for_macrel.faa"
   local rejected_tsv="${outdir}/predicted_smorfs.peptides_for_macrel.rejected.tsv"
-  local macrel_tsv="${outdir}/macrel_predictions.normalized.tsv predominan"
+  local macrel_tsv="${outdir}/macrel_predictions.normalized.tsv"
   local merged_tsv
 
   if [[ -n "${MACREL_ATTACH_OUT:-}" ]]; then
