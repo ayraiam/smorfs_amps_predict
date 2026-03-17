@@ -41,8 +41,11 @@ ENV_PREFIX="${ENV_PREFIX_DIR}/${ENV_NAME}"
 BASE_RESULTS_DIR="${RESULTS_DIR:-results}"
 PROJECT_ROOT="$(pwd)"
 
-# Where smORFs outputs go:
+# Global summaries stay under results/
 RESULTS_DIR="${BASE_RESULTS_DIR}/smorfs"
+
+# Sample-level heavy outputs go to scratch
+SMORFS_WORK_ROOT="${SMORFS_WORK_ROOT:-/scratch/t.sousa/data_used/smorfs}"
 
 # Where MetaFlye assemblies are:
 ASSEMBLY_ROOT="${BASE_RESULTS_DIR}/assembly_metaflye"
@@ -504,10 +507,7 @@ run_metaeuk_fungi() {
   local prefix="${final_dir}/metaeuk_preds"
 
   # Scratch tmp dir mirrors sample structure under /scratch
-  local scratch_root="${SCRATCH_METAEUK_ROOT:-/scratch/t.sousa}"
-  local rel_sample_dir
-  rel_sample_dir="$(realpath --relative-to="${RESULTS_DIR}" "${outdir}")"
-  local tmpdir="${scratch_root}/smorfs/${rel_sample_dir}/fungi/metaeuk/tmp"
+  local tmpdir="${outdir}/fungi/metaeuk/tmp"
 
   rm -rf "${tmpdir}"
   mkdir -p "${tmpdir}"
@@ -834,7 +834,7 @@ run_one_sample() {
 
 run_one_sample_metaeuk() {
   local sample_id="$1"
-  local outdir="${RESULTS_DIR}/${sample_id}"
+  local outdir="${SMORFS_WORK_ROOT}/${sample_id}"
   local fungi_fa="${outdir}/contigs/fungi_contigs.fasta"
 
   [[ -s "${fungi_fa}" ]] || die "Missing fungi/euk contigs for sample '${sample_id}': ${fungi_fa}"
@@ -862,7 +862,7 @@ Usage:
 Notes:
   - Expects MetaFlye assembly at: ${ASSEMBLY_ROOT}/<sample_id>/assembly.fasta
   - MetaEuk expects fungi contigs already split at:
-      ${RESULTS_DIR}/<sample_id>/contigs/fungi_contigs.fasta
+      ${SMORFS_WORK_ROOT}/<sample_id>/contigs/fungi_contigs.fasta
 
 Args:
   --create-env
