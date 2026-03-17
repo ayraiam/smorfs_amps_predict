@@ -10,6 +10,7 @@ echo "RESULTS_DIR         : ${RESULTS_DIR:-}"
 echo "REFINE_EUKS_ENV     : ${REFINE_EUKS_ENV:-}"
 echo "REFINE_EUKS_RUN_ARGS: ${REFINE_EUKS_RUN_ARGS:-}"
 echo "CPUS                : ${CPUS:-}"
+echo "SMORFS_WORK_ROOT    : ${SMORFS_WORK_ROOT:-}"
 echo "============================================"
 
 bash workflow/run_refine_annot_smorf_euks.sh \
