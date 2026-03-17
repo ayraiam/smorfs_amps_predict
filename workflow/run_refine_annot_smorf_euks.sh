@@ -10,7 +10,8 @@ SAMPLES_FILE=""
 INPUT_TSV=""
 RUN_STEP1=1
 RUN_STEP2=1
-RUN_STEP3=1
+RUN_STEP3=
+SMORFS_WORK_ROOT="${SMORFS_WORK_ROOT:-/scratch/t.sousa/data_used/smorfs}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 msg() { echo "[$(date +'%F %T')] $*" >&2; }
@@ -58,7 +59,8 @@ activate_env() {
 run_one_sample() {
   local sample_id="$1"
   local results_dir="${RESULTS_DIR:-results}"
-  local sample_dir="${results_dir}/smorfs/${sample_id}"
+  local smorfs_work_root="${SMORFS_WORK_ROOT:-/scratch/t.sousa/data_used/smorfs}"
+  local sample_dir="${smorfs_work_root}/${sample_id}"
 
   [[ -d "${sample_dir}" ]] || die "Sample smorfs dir not found: ${sample_dir}"
 
