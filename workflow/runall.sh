@@ -112,6 +112,9 @@ REFINE_EUKS_STEP1=1
 REFINE_EUKS_STEP2=1
 REFINE_EUKS_STEP3=1
 
+# Scratch root for sample-level smORFs outputs
+SMORFS_WORK_ROOT="${SMORFS_WORK_ROOT:-/scratch/t.sousa/data_used/smorfs}"
+
 usage() {
   echo "Usage: bash workflow/runall.sh [options]"
   echo
@@ -469,6 +472,7 @@ RUN_PWD="$(pwd)"
   echo "  METRICS_ENV    : ${METRICS_ENV}"
   echo "  RUN_METAEUK     : ${RUN_METAEUK}"
   echo "  METAEUK_DB      : ${METAEUK_DB:-<unset>}"
+  echo "  SMORFS_WORK_ROOT: ${SMORFS_WORK_ROOT}"
   echo "============================================"
   echo
 } | tee -a "$OUT_LOG" "$ERR_LOG" "$CMD_LOG"
@@ -597,7 +601,7 @@ if [[ "${RUN_SMORFS}" -eq 1 ]]; then
     --mem="${MEM}" \
     --time="${TIME}" \
     --chdir="${WDIR}" \
-    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR}",SMORFS_ENV="${SMORFS_ENV}",SMORFS_RUN_ARGS="${SMORFS_RUN_ARGS}" \
+    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",SMORFS_WORK_ROOT="${SMORFS_WORK_ROOT}",FUNANNOTATE_DB_DIR="${FUNANNOTATE_DB_DIR}",SMORFS_ENV="${SMORFS_ENV}",SMORFS_RUN_ARGS="${SMORFS_RUN_ARGS}" \
     --output="${SMORFS_OUT_LOG}" \
     --error="${SMORFS_ERR_LOG}" \
     workflow/smorfs_job.sh \
@@ -637,7 +641,7 @@ if [[ "${RUN_METAEUK}" -eq 1 ]]; then
     --mem="${MEM}" \
     --time="${TIME}" \
     --chdir="${WDIR}" \
-    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",SMORFS_ENV="${SMORFS_ENV}",METAEUK_DB="${METAEUK_DB}",METAEUK_RUN_ARGS="${METAEUK_RUN_ARGS}" \
+    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",SMORFS_WORK_ROOT="${SMORFS_WORK_ROOT}",SMORFS_ENV="${SMORFS_ENV}",METAEUK_DB="${METAEUK_DB}",METAEUK_RUN_ARGS="${METAEUK_RUN_ARGS}" \
     --output="${METAEUK_OUT_LOG}" \
     --error="${METAEUK_ERR_LOG}" \
     workflow/metaeuk_job.sh \
@@ -773,7 +777,7 @@ if [[ "${RUN_REFINE_EUKS}" -eq 1 ]]; then
     --mem="${MEM}" \
     --time="${TIME}" \
     --chdir="${WDIR}" \
-    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",REFINE_EUKS_ENV="${REFINE_EUKS_ENV}",REFINE_EUKS_RUN_ARGS="${REFINE_EUKS_RUN_ARGS}" \
+    --export=ALL,CPUS="${CPUS}",RESULTS_DIR="${RESULTS_DIR}",SMORFS_WORK_ROOT="${SMORFS_WORK_ROOT}",REFINE_EUKS_ENV="${REFINE_EUKS_ENV}",REFINE_EUKS_RUN_ARGS="${REFINE_EUKS_RUN_ARGS}" \
     --output="${REFINE_EUKS_OUT_LOG}" \
     --error="${REFINE_EUKS_ERR_LOG}" \
     workflow/refine_euks_job.sh \
@@ -851,4 +855,4 @@ echo "Command record:"
 echo "  $CMD_LOG"
 echo "MetaFlye submit logs:"
 echo "  $MF_OUT_LOG"
-echo "  $MF_ERR_LOG"
+echo "  $MF_ERR_LOG
