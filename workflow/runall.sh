@@ -56,6 +56,7 @@ REFINE_BACS_SAMPLE_ID=""                              # optional single sample
 REFINE_BACS_INPUT_TSV=""                              # optional override (advanced)
 REFINE_BACS_JOB_ID=""
 REFINE_CLUSTER_ONLY=0
+REFINE_EUKS_CLUSTER_ONLY=0
 
 # Step control (default: run QC; MetaFlye only if requested)
 RUN_QC=1
@@ -417,6 +418,8 @@ while [[ $# -gt 0 ]]; do
         shift 2
         ;;
 
+      --refine-euks-cluster-only) REFINE_EUKS_CLUSTER_ONLY=1; shift 1 ;;
+
     *) echo "Unknown argument: $1"; usage ;;
   esac
 done
@@ -753,6 +756,11 @@ if [[ "${RUN_REFINE_EUKS}" -eq 1 ]]; then
 
   echo ">>> refine_euks steps: step1=${REFINE_EUKS_STEP1} step2=${REFINE_EUKS_STEP2} step3=${REFINE_EUKS_STEP3}" | tee -a "$OUT_LOG" "$CMD_LOG"
 
+  if [[ "${REFINE_EUKS_CLUSTER_ONLY}" -eq 1 ]]; then
+    REFINE_EUKS_RUN_ARGS="${REFINE_EUKS_RUN_ARGS} --cluster-only"
+    echo ">>> refine_euks running in CLUSTER-ONLY mode (Step 3 only)" | tee -a "$OUT_LOG" "$CMD_LOG"
+  fi
+
   if [[ -n "${REFINE_EUKS_INPUT_TSV}" ]]; then
     REFINE_EUKS_RUN_ARGS="${REFINE_EUKS_RUN_ARGS} --input-tsv ${REFINE_EUKS_INPUT_TSV}"
   fi
@@ -855,4 +863,4 @@ echo "Command record:"
 echo "  $CMD_LOG"
 echo "MetaFlye submit logs:"
 echo "  $MF_OUT_LOG"
-echo "  $MF_ERR_LOG
+echo "  $MF_ERR_LOG"
