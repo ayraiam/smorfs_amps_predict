@@ -135,6 +135,11 @@ def main():
     ap.add_argument("--run-step3", type=int, choices=[0,1], default=1)
     ap.add_argument("--cluster-map", default="")
     ap.add_argument("--env-label", default="")
+    ap.add_argument(
+        "--cluster-only",
+        action="store_true",
+        help="Only attach MMseqs cluster stats (Step 3) and write output; skip Steps 1/2.",
+    )
     args = ap.parse_args()
 
     df = pd.read_csv(args.input_tsv, sep="\t", dtype=str).copy()
@@ -151,6 +156,18 @@ def main():
 
     keep = df["tiara_label"].fillna("").str.lower().str.contains("euk|fung")
     df = df.loc[keep].copy()
+
+    if args.cluster_only:
+        if args.cluster_map:
+            env_label = args.env_label.strip() or None
+            df = attach_cluster_stats(df, args.cluster_map, env_label=env_label)
+            print("[INFO] (cluster-only) Step3 cluster stats attached.")
+        else:
+            print("[INFO] (cluster-only) requested but no cluster_map provided; skipped.")
+        df["confidence_tier"] = df["confidence_tier"].replace("", "UNASSESSED")
+        df.to_csv(args.out, sep="\t", index=False)
+        print(f"[OK] (cluster-only) wrote: {args.out}")
+        raise SystemExit(0)
 
     # STEP 1
     if args.run_step1 == 1:
