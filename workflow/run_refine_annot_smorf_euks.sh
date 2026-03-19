@@ -10,8 +10,8 @@ SAMPLES_FILE=""
 INPUT_TSV=""
 RUN_STEP1=1
 RUN_STEP2=1
-RUN_STEP3=
-SMORFS_WORK_ROOT="${SMORFS_WORK_ROOT:-/scratch/t.sousa/data_used/smorfs}"
+RUN_STEP3=1
+CLUSTER_ONLY=0
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 msg() { echo "[$(date +'%F %T')] $*" >&2; }
@@ -59,8 +59,7 @@ activate_env() {
 run_one_sample() {
   local sample_id="$1"
   local results_dir="${RESULTS_DIR:-results}"
-  local smorfs_work_root="${SMORFS_WORK_ROOT:-/scratch/t.sousa/data_used/smorfs}"
-  local sample_dir="${smorfs_work_root}/${sample_id}"
+  local sample_dir="${results_dir}/smorfs/${sample_id}"
 
   [[ -d "${sample_dir}" ]] || die "Sample smorfs dir not found: ${sample_dir}"
 
@@ -68,14 +67,24 @@ run_one_sample() {
   if [[ -n "${INPUT_TSV}" ]]; then
     in_tsv="${INPUT_TSV}"
   else
-    if [[ -f "${sample_dir}/catalog/predicted_smorfs.with_macrel.refined_euks.tsv" ]]; then
-      in_tsv="${sample_dir}/catalog/predicted_smorfs.with_macrel.refined_euks.tsv"
-    elif [[ -f "${sample_dir}/catalog/predicted_smorfs.refined_euks.tsv" ]]; then
-      in_tsv="${sample_dir}/catalog/predicted_smorfs.refined_euks.tsv"
-    elif [[ -f "${sample_dir}/catalog/predicted_smorfs.with_macrel.tsv" ]]; then
-      in_tsv="${sample_dir}/catalog/predicted_smorfs.with_macrel.tsv"
+    if [[ "${CLUSTER_ONLY}" -eq 1 ]]; then
+      if [[ -f "${sample_dir}/catalog/predicted_smorfs.with_macrel.refined_euks.tsv" ]]; then
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.with_macrel.refined_euks.tsv"
+      elif [[ -f "${sample_dir}/catalog/predicted_smorfs.refined_euks.tsv" ]]; then
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.refined_euks.tsv"
+      else
+        die "[${sample_id}] cluster-only requested but no refined_euks.tsv found. Run full refine first."
+      fi
     else
-      in_tsv="${sample_dir}/catalog/predicted_smorfs.tsv"
+      if [[ -f "${sample_dir}/catalog/predicted_smorfs.with_macrel.refined_euks.tsv" ]]; then
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.with_macrel.refined_euks.tsv"
+      elif [[ -f "${sample_dir}/catalog/predicted_smorfs.refined_euks.tsv" ]]; then
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.refined_euks.tsv"
+      elif [[ -f "${sample_dir}/catalog/predicted_smorfs.with_macrel.tsv" ]]; then
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.with_macrel.tsv"
+      else
+        in_tsv="${sample_dir}/catalog/predicted_smorfs.tsv"
+      fi
     fi
   fi
   [[ -f "${in_tsv}" ]] || die "Input TSV not found: ${in_tsv}"
@@ -97,22 +106,34 @@ run_one_sample() {
     cluster_args=( --cluster-map "${cluster_map}" --env-label "${env_label}" )
   fi
 
-  local base="$(basename "${in_tsv}")"
-  base="${base%.refined_euks.tsv}"
-  base="${base%.tsv}"
+  local out_tsv
+  if [[ "${CLUSTER_ONLY}" -eq 1 ]]; then
+    out_tsv="${sample_dir}/catalog/$(basename "${in_tsv%.tsv}").with_clusters.tsv"
+  else
+    local base="$(basename "${in_tsv}")"
+    base="${base%.refined_euks.tsv}"
+    base="${base%.tsv}"
+    out_tsv="${sample_dir}/catalog/${base}.refined_euks.tsv"
+  fi
 
-  local out_tsv="${sample_dir}/catalog/${base}.refined_euks.tsv"
+  local py_args=(
+    --sample "${sample_id}"
+    --input-tsv "${in_tsv}"
+    --metaeuk-gff "${metaeuk_gff}"
+    --fungi-contigs "${fungi_fa}"
+    --out "${out_tsv}"
+    --run-step1 "${RUN_STEP1}"
+    --run-step2 "${RUN_STEP2}"
+    --run-step3 "${RUN_STEP3}"
+  )
 
-  python workflow/refine_euks.py \
-    --sample "${sample_id}" \
-    --input-tsv "${in_tsv}" \
-    --metaeuk-gff "${metaeuk_gff}" \
-    --fungi-contigs "${fungi_fa}" \
-    --out "${out_tsv}" \
-    --run-step1 "${RUN_STEP1}" \
-    --run-step2 "${RUN_STEP2}" \
-    --run-step3 "${RUN_STEP3}" \
-    "${cluster_args[@]}"
+  py_args+=( "${cluster_args[@]}" )
+
+  if [[ "${CLUSTER_ONLY}" -eq 1 ]]; then
+    py_args+=( --cluster-only )
+  fi
+
+  python workflow/refine_euks.py "${py_args[@]}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -127,10 +148,18 @@ while [[ $# -gt 0 ]]; do
     --run-step1) RUN_STEP1="$2"; shift 2 ;;
     --run-step2) RUN_STEP2="$2"; shift 2 ;;
     --run-step3) RUN_STEP3="$2"; shift 2 ;;
+    --cluster-only) CLUSTER_ONLY=1; shift ;;
     -h|--help) exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
 done
+
+# If cluster-only mode is requested, override step flags
+if [[ "${CLUSTER_ONLY}" -eq 1 ]]; then
+  RUN_STEP1=0
+  RUN_STEP2=0
+  RUN_STEP3=1
+fi
 
 [[ -n "${MODE}" ]] || die "Provide --create-env or --run"
 
