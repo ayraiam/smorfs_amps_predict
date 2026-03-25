@@ -427,10 +427,55 @@ while [[ $# -gt 0 ]]; do
 
       --refine-euks-cluster-only) REFINE_EUKS_CLUSTER_ONLY=1; shift 1 ;;
 
-      --map-global-cds) RUN_MAP_GLOBAL_CDS=1; shift ;;
-      --map-global-cds-build-ref-only) RUN_MAP_GLOBAL_CDS=1; MAP_GLOBAL_CDS_BUILD_REF_ONLY=1; shift ;;
-      --map-global-cds-only) RUN_MAP_GLOBAL_CDS=1; MAP_GLOBAL_CDS_ONLY=1; shift ;;
-      --map-global-cds-sample-id) RUN_MAP_GLOBAL_CDS=1; MAP_GLOBAL_CDS_SAMPLE_ID="$2"; shift 2 ;;
+      --map-global-cds)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=1
+        shift
+        ;;
+
+     --map-global-cds-build-ref-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=1
+        MAP_GLOBAL_CDS_BUILD_REF_ONLY=1
+        shift
+        ;;
+
+      --map-global-cds-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=1
+        MAP_GLOBAL_CDS_ONLY=1
+        shift
+        ;;
+
+      --map-global-cds-sample-id)
+        RUN_MAP_GLOBAL_CDS=1
+        MAP_GLOBAL_CDS_SAMPLE_ID="$2"
+        shift 2
+        ;;
       --abund-env-name) ABUND_ENV_NAME="$2"; shift 2 ;;
 
     *) echo "Unknown argument: $1"; usage ;;
