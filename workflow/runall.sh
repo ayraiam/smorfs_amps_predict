@@ -116,6 +116,13 @@ REFINE_EUKS_STEP3=1
 # Scratch root for sample-level smORFs outputs
 SMORFS_WORK_ROOT="${SMORFS_WORK_ROOT:-/scratch/t.sousa/data_used/smorfs}"
 
+# Optional global CDS abundance mapping (OFF by default)
+RUN_MAP_GLOBAL_CDS=0
+MAP_GLOBAL_CDS_BUILD_REF_ONLY=0
+MAP_GLOBAL_CDS_ONLY=0
+MAP_GLOBAL_CDS_SAMPLE_ID=""
+ABUND_ENV_NAME="smorf_abundance_env"
+
 usage() {
   echo "Usage: bash workflow/runall.sh [options]"
   echo
@@ -420,6 +427,12 @@ while [[ $# -gt 0 ]]; do
 
       --refine-euks-cluster-only) REFINE_EUKS_CLUSTER_ONLY=1; shift 1 ;;
 
+      --map-global-cds) RUN_MAP_GLOBAL_CDS=1; shift ;;
+      --map-global-cds-build-ref-only) RUN_MAP_GLOBAL_CDS=1; MAP_GLOBAL_CDS_BUILD_REF_ONLY=1; shift ;;
+      --map-global-cds-only) RUN_MAP_GLOBAL_CDS=1; MAP_GLOBAL_CDS_ONLY=1; shift ;;
+      --map-global-cds-sample-id) RUN_MAP_GLOBAL_CDS=1; MAP_GLOBAL_CDS_SAMPLE_ID="$2"; shift 2 ;;
+      --abund-env-name) ABUND_ENV_NAME="$2"; shift 2 ;;
+
     *) echo "Unknown argument: $1"; usage ;;
   esac
 done
@@ -682,6 +695,34 @@ if [[ "${RUN_MMSEQS_GLOBAL}" -eq 1 ]]; then
 
   echo ">>> MMseqs GLOBAL clustering submitted as job ${MM_JOB_ID}" | tee -a "$OUT_LOG" "$CMD_LOG"
   echo ">>> MMseqs logs: ${MM_OUT_LOG} / ${MM_ERR_LOG}" | tee -a "$OUT_LOG" "$CMD_LOG"
+fi
+
+if [[ "${RUN_MAP_GLOBAL_CDS}" -eq 1 ]]; then
+  echo "[INFO] Running GLOBAL CDS abundance mapping step"
+
+  map_args=(
+    --results-dir "${RESULTS_DIR}"
+    --metadata-map "metadata/metagenome_files.txt"
+    --partition "${PARTITION}"
+    --time "${TIME}"
+    --cpus "${CPUS}"
+    --mem "${MEM}"
+    --env-name "${ABUND_ENV_NAME}"
+  )
+
+  if [[ "${MAP_GLOBAL_CDS_BUILD_REF_ONLY}" -eq 1 ]]; then
+    map_args+=(--build-ref-only)
+  fi
+
+  if [[ "${MAP_GLOBAL_CDS_ONLY}" -eq 1 ]]; then
+    map_args+=(--map-only)
+  fi
+
+  if [[ -n "${MAP_GLOBAL_CDS_SAMPLE_ID}" ]]; then
+    map_args+=(--sample-id "${MAP_GLOBAL_CDS_SAMPLE_ID}")
+  fi
+
+  bash workflow/run_map_global_cds_abundance.sh "${map_args[@]}"
 fi
 
 if [[ "${RUN_REFINE_BACS}" -eq 1 ]]; then
