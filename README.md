@@ -52,7 +52,7 @@ This design enables reproducibility, re-entrancy, and HPC-scalable workflows.
 </pre>
 
 <pre>
-PIPELINE OVERVIEW
+PIPELINE OVERVIEW (needs improvement!!)
 -----------------
 
 Raw reads
@@ -79,6 +79,28 @@ All predicted peptides
    │
    ▼
 peptides_all.faa
+   │
+   ▼
+GLOBAL peptide clustering (MMseqs2)
+   │
+   ▼
+cluster_map.tsv
+   │
+   ▼
+GLOBAL representative CDS catalog
+   │
+   ▼
+cds_nr_global_rep.fna
+   │
+   ▼
+( future step )
+read mapping per library
+   │
+   ▼
+abundance matrix
+   │
+   ▼
+differential abundance analysis
    │
    ▼
 predicted_smorfs.with_macrel.tsv
@@ -117,6 +139,9 @@ STRUCTURE
    plot_metaflye_metrics.R                 - Boxplots from metrics TSV
    predict_amps.py                         - Macrel-based AMP prediction
    attach_macrel_to_predicted_smorfs.py    - Safe Macrel merge (ID-validated)
+   run_mmseqs_global_cluster.sh              - Global peptide clustering
+   build_global_rep_cds_from_cluster_map.py  - Build NR CDS reference
+   run_build_global_rep_cds.sh               - Runner for CDS reference stage
 
  /envs/                                    - Conda environments (auto-created)
  /logs/                                    - Timestamped Slurm logs
@@ -131,12 +156,19 @@ STRUCTURE
    qc_post_filt/
    assembly_metaflye/
    smorfs/
+     GLOBAL/
+       catalog/
+         peptides_all_global.faa
+         cds_nr_global_rep.fna
+         cds_nr_global_rep.metadata.tsv
+       mmseqs/
+         cluster_map.tsv
+         clusters_pairs.tsv
    catalog_global/
  README.md
  LICENSE
  CITATION.cff
 </pre>
-
 ---
 
 <pre>
@@ -154,6 +186,7 @@ DESIGN PRINCIPLES
  - Transparent logging, resumability, provenance tracking
  - Scratch-aware temporary file handling
  - Batch-aware QC for multi-run projects
+ - Global NR CDS catalog ensures consistent abundance units across environments
 </pre>
 
 ---
@@ -355,6 +388,69 @@ similarity patterns rather than fungi-only clustering.
 </pre>
 
 <pre>
+GLOBAL REPRESENTATIVE CDS CATALOG (NR CDS REFERENCE)
+---------------------------------------------------
+
+After global peptide clustering (MMseqs2), the pipeline constructs a
+nonredundant nucleotide CDS reference corresponding to the representative
+peptide sequences of each cluster.
+
+This step prepares the reference catalog used for downstream abundance
+quantification and differential analysis.
+
+Workflow logic:
+
+  1) Read cluster_map.tsv
+       (member_id <tab> representative_id)
+
+  2) Extract representative IDs
+       ENV|feature_id
+
+  3) Parse ENV prefix to identify source catalog:
+       results/smorfs/[ENV]_GLOBAL/catalog/cds_all.fna
+
+  4) Retrieve nucleotide CDS sequence for each representative feature
+
+  5) Build global nonredundant CDS FASTA:
+
+       results/smorfs/GLOBAL/catalog/cds_nr_global_rep.fna
+
+  6) Build accompanying metadata table:
+
+       results/smorfs/GLOBAL/catalog/cds_nr_global_rep.metadata.tsv
+
+
+FASTA header format:
+
+  ENV|feature_id
+
+Example:
+
+  >UNIFORME|contig_189672_21 # 123 # 456 # 1 # ID=189672_21
+
+
+Rationale:
+
+Peptide clustering defines functional redundancy.
+CDS representatives provide a stable nucleotide reference for
+read mapping and abundance estimation.
+
+Clustering is performed only once at the peptide level.
+CDS sequences are extracted for the cluster representatives,
+ensuring:
+
+  • consistent biological units across environments
+  • reduced redundancy
+  • compatibility with read-mapping tools
+  • reproducible feature identifiers
+  • compatibility with DESeq2 count matrices
+
+
+This step does NOT perform read mapping yet.
+It only prepares the global reference catalog.
+</pre>
+
+<pre>
 REFINEMENT LOGIC OVERVIEW
 -------------------------
 
@@ -474,6 +570,7 @@ Macrel Attach Mode:
   --id-col STR
   --seq-col STR
   --macrel-attach-out PATH
+
 </pre>
 
 ---
@@ -611,9 +708,14 @@ bash workflow/runall.sh \
 bash workflow/runall.sh \
   --refine-euks-only \
   --refine-euks-step3-only \
-  --refine-euks-sample PENEIRA_GLOBAL</pre>
+  --refine-euks-sample PENEIRA_GLOBAL
+  
+GLOBAL NR CDS REFERENCE
+-----------------------
 
----
+# 18) Build GLOBAL representative CDS catalog from MMseq clusters
+bash workflow/runall.sh \
+  --build-global-rep-cds
 </pre>
 
 <pre>
