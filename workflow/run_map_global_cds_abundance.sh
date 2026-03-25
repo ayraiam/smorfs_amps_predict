@@ -108,12 +108,20 @@ mkdir -p "${REF_DIR}" "${MANIFEST_DIR}" "${LOG_DIR}"
 build_reference() {
   [[ -f "${CLUSTER_MAP}" ]] || die "Missing cluster map: ${CLUSTER_MAP}"
 
-  msg "Building GLOBAL representative CDS FASTA"
-  python workflow/build_global_rep_cds_from_cluster_map.py \
-    --cluster-map "${CLUSTER_MAP}" \
-    --results-dir "${RESULTS_DIR}" \
-    --out-fasta "${GLOBAL_REF_FASTA}" \
-    --out-meta "${GLOBAL_REF_META}"
+  msg "Building GLOBAL representative CDS FASTA via srun"
+  srun \
+    --partition="${PARTITION}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="${CPUS}" \
+    --mem="${MEM}" \
+    --time="${TIME}" \
+    --chdir="${PWD}" \
+    python workflow/build_global_rep_cds_from_cluster_map.py \
+      --cluster-map "${CLUSTER_MAP}" \
+      --results-dir "${RESULTS_DIR}" \
+      --out-fasta "${GLOBAL_REF_FASTA}" \
+      --out-meta "${GLOBAL_REF_META}"
 
   [[ -s "${GLOBAL_REF_FASTA}" ]] || die "Representative CDS FASTA was not created: ${GLOBAL_REF_FASTA}"
   [[ -s "${GLOBAL_REF_META}" ]] || die "Representative CDS metadata TSV was not created: ${GLOBAL_REF_META}"
@@ -189,4 +197,4 @@ main() {
   msg "DONE."
 }
 
-main 
+main "$@" 
