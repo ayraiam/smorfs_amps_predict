@@ -210,8 +210,13 @@ usage() {
   echo "  --downstream-only          Run downstream analysis only (parse flye.log + boxplots)"
   echo "  --run-downstream           Run downstream analysis in addition to selected steps (CAUTION: run after assembly finishes)"
   echo "  --metrics-env STR          Env name for downstream analysis (default: metaflye_metrics_env)"
-  echo "  --constraint STR      Slurm constraint (e.g., skylake_avx512)"
-
+  echo "  --constraint STR      Slurm constraint (e.g., skylake_avx512"
+  echo "GLOBAL CDS abundance mapping:"
+  echo "  --map-global-cds              Build manifest from data/ and run GLOBAL CDS mapping step"
+  echo "  --map-global-cds-build-ref-only  Build GLOBAL representative CDS FASTA only"
+  echo "  --map-global-cds-only         Run only per-library mapping against existing GLOBAL representative CDS FASTA"
+  echo "  --map-global-cds-sample-id STR   Restrict mapping to libraries whose basename contains STR"
+  echo "  --abund-env-name STR          Conda env name for abundance step (default: smorf_abundance_env)"
   echo
   exit 0
 }
