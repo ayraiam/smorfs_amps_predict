@@ -93,11 +93,13 @@ GLOBAL representative CDS catalog
 cds_nr_global_rep.fna
    │
    ▼
-( future step )
-read mapping per library
+Read mapping per library (minimap2)
    │
    ▼
-abundance matrix
+primary alignments (MAPQ ≥ 20)
+   │
+   ▼
+per-CDS abundance tables
    │
    ▼
 differential abundance analysis
@@ -141,7 +143,8 @@ STRUCTURE
    attach_macrel_to_predicted_smorfs.py    - Safe Macrel merge (ID-validated)
    run_mmseqs_global_cluster.sh              - Global peptide clustering
    build_global_rep_cds_from_cluster_map.py  - Build NR CDS reference
-   run_build_global_rep_cds.sh               - Runner for CDS reference stage
+   run_map_global_cds_abundance.sh          - Runner for GLOBAL CDS mapping step
+   map_global_cds_array_task.sh             - Per-library mapping task (minimap2)
 
  /envs/                                    - Conda environments (auto-created)
  /logs/                                    - Timestamped Slurm logs
@@ -187,6 +190,10 @@ DESIGN PRINCIPLES
  - Scratch-aware temporary file handling
  - Batch-aware QC for multi-run projects
  - Global NR CDS catalog ensures consistent abundance units across environments
+ - Per-library mapping avoids cross-sample coverage bias
+ - Primary alignment filtering (MAPQ ≥ 20)
+ - Scratch-aware BAM storage to avoid project directory bloat
+ - Manifest auto-generated from FASTQs present in data/
 </pre>
 
 ---
@@ -451,6 +458,103 @@ It only prepares the global reference catalog.
 </pre>
 
 <pre>
+READ MAPPING TO GLOBAL CDS CATALOG
+----------------------------------
+
+After building the GLOBAL representative CDS catalog, each sequencing
+library is mapped independently back to the nonredundant CDS reference.
+
+This produces per-library abundance estimates for each representative smORF/CDS.
+
+Key design principles:
+
+  • mapping performed per library (not per environment)
+  • consistent reference across ecosystems
+  • primary alignments only
+  • MAPQ ≥ 20 filtering
+  • scratch-aware BAM storage
+  • DESeq2-compatible count matrices
+
+Mapping workflow:
+
+  data/*.fastq.gz
+        │
+        ▼
+  minimap2 (map-ont)
+        │
+        ▼
+  BAM sorting (temporary)
+        │
+        ▼
+  filtering:
+     primary alignments only
+     MAPQ ≥ 20
+        │
+        ▼
+  primary_q20.bam
+        │
+        ▼
+  idxstats tables
+        │
+        ▼
+  abundance matrix
+
+
+Outputs written to scratch:
+
+  /scratch/t.sousa/data_used/read_mapping/
+
+Directory structure:
+
+  read_mapping/
+     bam/
+        <library_id>/
+           *.primary_q20.bam
+           *.primary_q20.bam.bai
+
+     stats/
+        <library_id>/
+           *.primary_q20.flagstat.txt
+           *.primary_q20.idxstats.tsv
+
+
+Representative CDS reference:
+
+  results/abundance/global_cds/reference/global_rep_cds.fna
+
+
+Manifest automatically built from FASTQs present in:
+
+  data/
+
+
+Each FASTQ file is treated as one independent library.
+
+
+Example manifest entry:
+
+  nanopore_shotgun_RDS18_TS-300-mistura_09
+      → /scratch/t.sousa/data_used/nanopore_shotgun_RDS18_TS-300-mistura_09.fastq.gz
+
+
+Rationale:
+
+Mapping reads to the global representative CDS catalog provides
+a consistent feature space across all environments.
+
+Counts correspond to structurally nonredundant peptide clusters
+defined by MMseqs2.
+
+
+These abundance estimates support:
+
+  • differential abundance analysis (DESeq2)
+  • ecological distribution analysis
+  • recurrence validation
+  • prioritization of conserved AMP candidates
+</pre>
+
+<pre>
 REFINEMENT LOGIC OVERVIEW
 -------------------------
 
@@ -571,6 +675,38 @@ Macrel Attach Mode:
   --seq-col STR
   --macrel-attach-out PATH
 
+GLOBAL CDS ABUNDANCE MAPPING:
+
+Build GLOBAL representative CDS FASTA only:
+
+bash workflow/runall.sh \
+  --map-global-cds-build-ref-only
+
+
+Run read mapping only (libraries currently present in data/):
+
+bash workflow/runall.sh \
+  --map-global-cds-only
+
+
+Build reference + run mapping:
+
+bash workflow/runall.sh \
+  --map-global-cds
+
+
+Restrict mapping to subset of libraries:
+
+bash workflow/runall.sh \
+  --map-global-cds-only \
+  --map-global-cds-sample-id RDS18
+
+
+Optional:
+
+--abund-env-name STR
+   name of conda env used for mapping tools
+   default: smorf_abundance_env
 </pre>
 
 ---
@@ -578,13 +714,33 @@ Macrel Attach Mode:
 <pre>
 SCRATCH USAGE
 -------------
-Large temporary co-assembly FASTQ files are written to scratch:
+
+Large intermediate files are written to scratch to avoid
+inflating the project directory.
+
+MetaFlye temporary files:
 
   /scratch/t.sousa/data_used/metaflye_tmp/<SampleID>/
 
-These are deleted automatically after Flye completes.
 
-Final assemblies and outputs are always written inside the project directory.
+GLOBAL CDS read mapping outputs:
+
+  /scratch/t.sousa/data_used/read_mapping/
+
+     bam/
+        per-library primary alignment BAMs
+
+     stats/
+        flagstat and idxstats summaries
+
+     tmp/
+        temporary sorted BAM files (auto-deleted)
+
+
+Final catalogs and metadata remain inside the project directory:
+
+  results/smorfs/
+  results/abundance/
 </pre>
 
 ---
