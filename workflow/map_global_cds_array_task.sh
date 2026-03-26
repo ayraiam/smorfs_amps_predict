@@ -12,8 +12,11 @@ set -euo pipefail
 #   - SLURM_ARRAY_TASK_ID
 #
 # Outputs:
+#   /scratch/t.sousa/data_used/read_mapping/bam/<SampleID>/<library>.vs_global_rep_cds.sorted.bam
+#   /scratch/t.sousa/data_used/read_mapping/bam/<SampleID>/<library>.vs_global_rep_cds.sorted.bam.bai
 #   /scratch/t.sousa/data_used/read_mapping/bam/<SampleID>/<library>.vs_global_rep_cds.primary_q20.bam
 #   /scratch/t.sousa/data_used/read_mapping/bam/<SampleID>/<library>.vs_global_rep_cds.primary_q20.bam.bai
+#   /scratch/t.sousa/data_used/read_mapping/stats/<SampleID>/<library>.sorted.flagstat.txt
 #   /scratch/t.sousa/data_used/read_mapping/stats/<SampleID>/<library>.primary_q20.flagstat.txt
 #   /scratch/t.sousa/data_used/read_mapping/stats/<SampleID>/<library>.primary_q20.idxstats.tsv
 # ==========================================================
@@ -25,12 +28,10 @@ ABUND_ENV_NAME="${ABUND_ENV_NAME:-smorf_abundance_env}"
 ENV_PREFIX_DIR="${ENV_PREFIX_DIR:-envs}"
 ENV_PREFIX="${ENV_PREFIX_DIR}/${ABUND_ENV_NAME}"
 
-# All mapping outputs go here
 READ_MAPPING_ROOT="${READ_MAPPING_ROOT:-/scratch/t.sousa/data_used/read_mapping}"
 
 BAM_ROOT="${READ_MAPPING_ROOT}/bam"
 STATS_ROOT="${READ_MAPPING_ROOT}/stats"
-TMP_ROOT="${READ_MAPPING_ROOT}/tmp"
 
 log() { echo "[$(date --iso-8601=seconds)] $*" >&2; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -52,29 +53,33 @@ init_conda() {
 
 ensure_env_once() {
   init_conda
-  mkdir -p "${ENV_PREFIX_DIR}" "${BAM_ROOT}" "${STATS_ROOT}" "${TMP_ROOT}"
+  mkdir -p "${ENV_PREFIX_DIR}" "${BAM_ROOT}" "${STATS_ROOT}"
 
   local lockdir="${ENV_PREFIX}.lockdir"
+  local ready_flag="${ENV_PREFIX}/.env_ready"
 
-  if [[ -d "${ENV_PREFIX}" ]]; then
-    log "Env exists: ${ENV_PREFIX}"
+  if [[ -d "${ENV_PREFIX}" && -f "${ready_flag}" ]]; then
+    log "Env exists and is ready: ${ENV_PREFIX}"
   else
     while ! mkdir "${lockdir}" 2>/dev/null; do
       log "Waiting for env lock..."
       sleep 5
     done
 
-    if [[ -d "${ENV_PREFIX}" ]]; then
-      log "Env appeared while waiting. Continuing."
+    if [[ -d "${ENV_PREFIX}" && -f "${ready_flag}" ]]; then
+      log "Env became ready while waiting. Continuing."
       rmdir "${lockdir}" || true
     else
       log "Creating conda env at: ${ENV_PREFIX}"
+      rm -rf "${ENV_PREFIX}" 2>/dev/null || true
+
       local installer="conda"
       if have_cmd mamba; then installer="mamba"; fi
 
       "${installer}" create -y -p "${ENV_PREFIX}" -c conda-forge -c bioconda \
         minimap2 samtools python pandas pysam pigz
 
+      touch "${ready_flag}"
       log "Env created: ${ENV_PREFIX}"
       rmdir "${lockdir}" || true
     fi
@@ -104,7 +109,7 @@ main() {
 
   ensure_env_once
 
-  local line sample_id fastq lib_base sample_bam_dir sample_stats_dir filtered_bam tmp_sorted
+  local line sample_id fastq lib_base sample_bam_dir sample_stats_dir sorted_bam filtered_bam
   line="$(pick_line_from_manifest)"
   [[ -n "${line}" ]] || die "No line found in manifest for array index ${SLURM_ARRAY_TASK_ID}"
 
@@ -122,13 +127,13 @@ main() {
 
   sample_bam_dir="${BAM_ROOT}/${sample_id}"
   sample_stats_dir="${STATS_ROOT}/${sample_id}"
-  mkdir -p "${sample_bam_dir}" "${sample_stats_dir}" "${TMP_ROOT}/${sample_id}"
+  mkdir -p "${sample_bam_dir}" "${sample_stats_dir}"
 
+  sorted_bam="${sample_bam_dir}/${lib_base}.vs_global_rep_cds.sorted.bam"
   filtered_bam="${sample_bam_dir}/${lib_base}.vs_global_rep_cds.primary_q20.bam"
-  tmp_sorted="${TMP_ROOT}/${sample_id}/${lib_base}.tmp.sorted.bam"
 
-  if [[ -s "${filtered_bam}" && -s "${filtered_bam}.bai" ]]; then
-    log "Filtered BAM already exists for ${sample_id} / ${lib_base}. Skipping."
+  if [[ -s "${sorted_bam}" && -s "${sorted_bam}.bai" && -s "${filtered_bam}" && -s "${filtered_bam}.bai" ]]; then
+    log "Sorted and filtered BAMs already exist for ${sample_id} / ${lib_base}. Skipping."
     exit 0
   fi
 
@@ -142,16 +147,17 @@ main() {
 
   minimap2 -ax map-ont -t "${THREADS}" "${ABUND_GLOBAL_REF}" "${fastq}" \
     | samtools view -@ "${THREADS}" -bS - \
-    | samtools sort -@ "${THREADS}" -o "${tmp_sorted}"
+    | samtools sort -@ "${THREADS}" -o "${sorted_bam}"
+
+  samtools index -@ "${THREADS}" "${sorted_bam}"
 
   # Keep primary alignments with MAPQ >= 20
-  samtools view -@ "${THREADS}" -b -F 2308 -q 20 "${tmp_sorted}" > "${filtered_bam}"
+  samtools view -@ "${THREADS}" -b -F 2308 -q 20 "${sorted_bam}" > "${filtered_bam}"
   samtools index -@ "${THREADS}" "${filtered_bam}"
 
+  samtools flagstat -@ "${THREADS}" "${sorted_bam}" > "${sample_stats_dir}/${lib_base}.sorted.flagstat.txt"
   samtools flagstat -@ "${THREADS}" "${filtered_bam}" > "${sample_stats_dir}/${lib_base}.primary_q20.flagstat.txt"
   samtools idxstats "${filtered_bam}" > "${sample_stats_dir}/${lib_base}.primary_q20.idxstats.tsv"
-
-  rm -f "${tmp_sorted}"
 
   log "DONE: ${sample_id} / ${lib_base}"
 }
