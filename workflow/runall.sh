@@ -752,7 +752,7 @@ if [[ "${RUN_MAP_GLOBAL_CDS}" -eq 1 ]]; then
 
   map_args=(
     --results-dir "${RESULTS_DIR}"
-    --metadata-map "metadata/metagenome_files.txt"
+    --data-dir "data"
     --partition "${PARTITION}"
     --time "${TIME}"
     --cpus "${CPUS}"
