@@ -48,11 +48,14 @@ All major stages are explicitly decoupled:
   - Refinement independently
   - Downstream analysis independently
 
+The pipeline integrates compositional differential abundance analysis
+(ALDEx2) to identify environment-associated smORFs while accounting for
+metagenomic count structure and library size variability.
 This design enables reproducibility, re-entrancy, and HPC-scalable workflows.
 </pre>
 
 <pre>
-PIPELINE OVERVIEW (needs improvement!!)
+PIPELINE OVERVIEW
 -----------------
 
 Raw reads
@@ -96,20 +99,23 @@ cds_nr_global_rep.fna
 Read mapping per library (minimap2)
    │
    ▼
-primary alignments (MAPQ ≥ 20)
+Primary alignments (MAPQ ≥ 20)
    │
    ▼
-per-CDS abundance tables
+Per-CDS abundance tables
    │
    ▼
-differential abundance analysis
+Compositional normalization (CLR)
    │
    ▼
-predicted_smorfs.with_macrel.tsv
+Differential abundance analysis (ALDEx2)
    │
-   ├─ Bacterial refinement
+   ▼
+Environment-associated smORFs
    │
-   └─ Fungal refinement
+   ├─ Bacterial genomic-context refinement
+   │
+   └─ Fungal genomic-context refinement
         │
         ▼
 Refined smORF catalog
@@ -145,6 +151,8 @@ STRUCTURE
    build_global_rep_cds_from_cluster_map.py  - Build NR CDS reference
    run_map_global_cds_abundance.sh          - Runner for GLOBAL CDS mapping step
    map_global_cds_array_task.sh             - Per-library mapping task (minimap2)
+   aldex2_global_da.R                     - ALDEx2 differential abundance workflow
+   run_differential_abundance_aldex2.sh   - Slurm runner for compositional DA
 
  /envs/                                    - Conda environments (auto-created)
  /logs/                                    - Timestamped Slurm logs
@@ -156,7 +164,6 @@ STRUCTURE
  /data/                                    - Input FASTQ(.gz) files (read-only)
  /results/
    qc_pre_filt/
-   qc_post_filt/
    assembly_metaflye/
    smorfs/
      GLOBAL/
@@ -167,7 +174,15 @@ STRUCTURE
        mmseqs/
          cluster_map.tsv
          clusters_pairs.tsv
-   catalog_global/
+   abundance/
+      global_cds/
+         reference/
+         manifests/
+         aldex2/
+            aldex2_counts_matrix.tsv
+            aldex2_metadata.tsv
+            aldex2_results_kw.tsv
+            mapping_summary_plot.pdf
  README.md
  LICENSE
  CITATION.cff
@@ -194,6 +209,9 @@ DESIGN PRINCIPLES
  - Primary alignment filtering (MAPQ ≥ 20)
  - Scratch-aware BAM storage to avoid project directory bloat
  - Manifest auto-generated from FASTQs present in data/
+ - Compositional-aware differential abundance using CLR transformation
+ - Monte Carlo Dirichlet sampling to model count uncertainty
+ - Environment-level statistical comparison across ecosystems
 </pre>
 
 ---
@@ -473,7 +491,7 @@ Key design principles:
   • primary alignments only
   • MAPQ ≥ 20 filtering
   • scratch-aware BAM storage
-  • DESeq2-compatible count matrices
+  • ALDEx2-compatible compositional count matrices
 
 Mapping workflow:
 
@@ -552,6 +570,103 @@ These abundance estimates support:
   • ecological distribution analysis
   • recurrence validation
   • prioritization of conserved AMP candidates
+</pre>
+
+<pre>
+DIFFERENTIAL ABUNDANCE ANALYSIS (ALDEx2)
+----------------------------------------
+
+After read mapping against the GLOBAL representative CDS catalog,
+the pipeline supports compositional differential abundance analysis
+using ALDEx2.
+
+ALDEx2 is specifically designed for compositional sequencing data,
+addressing biases introduced by library size variation and the
+closed-sum constraint inherent to metagenomic count data.
+
+Key characteristics:
+
+  • compositional data aware (CLR transformation)
+  • Monte Carlo Dirichlet sampling of count uncertainty
+  • robust to uneven sequencing depth
+  • suitable for sparse metagenomic feature tables
+  • nonparametric statistical testing
+
+Input files:
+
+  /scratch/t.sousa/data_used/read_mapping/stats/<ENV>/<SampleID>/
+      *.primary_q20.idxstats.tsv
+
+Each idxstats file provides:
+
+  CDS_id
+  CDS_length
+  mapped_reads
+
+These values are combined across libraries to produce a global
+count matrix with dimensions:
+
+  CDS features × libraries
+
+
+Statistical workflow:
+
+Step 1 — Feature filtering
+  remove CDS with insufficient counts across libraries
+
+Step 2 — Monte Carlo Dirichlet sampling
+  models technical variation in observed counts
+
+Step 3 — CLR transformation
+  centered log-ratio normalization of compositional data
+
+Step 4 — Global statistical testing
+  Kruskal-Wallis test across environments:
+
+    uniforme
+    riparia
+    peneira
+    campina
+
+Step 5 — multiple testing correction
+  Benjamini–Hochberg FDR control
+
+
+Output files:
+
+  results/abundance/global_cds/aldex2/
+
+     aldex2_counts_matrix.tsv
+     aldex2_metadata.tsv
+     aldex2_results_kw.tsv
+     aldex2_significant.tsv
+     mapping_summary_plot.pdf
+
+
+Example output columns:
+
+  feature_id
+  kw.ep
+  kw.eBH
+  effect
+  median_uniforme
+  median_riparia
+  median_peneira
+  median_campina
+
+
+Interpretation:
+
+Significant CDS represent smORFs whose relative abundance
+differs across environments after accounting for compositional effects.
+
+These features can be integrated with:
+
+  • recurrence statistics (MMseqs clusters)
+  • genomic-context refinement
+  • AMP probability scores (Macrel)
+
+enabling prioritization of ecologically relevant antimicrobial candidates.
 </pre>
 
 <pre>
@@ -707,6 +822,46 @@ Optional:
 --abund-env-name STR
    name of conda env used for mapping tools
    default: smorf_abundance_env
+
+DIFFERENTIAL ABUNDANCE (ALDEx2):
+
+Run full compositional DA workflow:
+
+bash workflow/runall.sh \
+  --aldex2-da-only
+
+
+Run only count matrix preparation:
+
+bash workflow/runall.sh \
+  --aldex2-prepare-only
+
+
+Run only statistical testing:
+
+bash workflow/runall.sh \
+  --aldex2-only
+
+
+Check or install ALDEx2 in abundance environment:
+
+bash workflow/runall.sh \
+  --aldex2-check-install-only
+
+
+Optional parameters:
+
+--aldex2-mc-samples INT
+   Monte Carlo instances for Dirichlet sampling
+   default: 128
+
+--aldex2-min-count INT
+   minimum count threshold per CDS
+   default: 10
+
+--aldex2-min-samples INT
+   minimum number of libraries passing filter
+   default: 2
 </pre>
 
 ---
