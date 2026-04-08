@@ -122,6 +122,7 @@ MAP_GLOBAL_CDS_BUILD_REF_ONLY=0
 MAP_GLOBAL_CDS_ONLY=0
 MAP_GLOBAL_CDS_SAMPLE_ID=""
 ABUND_ENV_NAME="smorf_abundance_env"
+ALDEX2_ENV_NAME="smorf_aldex2_env"
 
 RUN_ALDEX2_DA=0
 ALDEX2_DA_CHECK_INSTALL_ONLY=0
@@ -247,6 +248,7 @@ usage() {
   echo "  --aldex2-min-samples INT      Minimum number of samples passing filter"
   echo "  --aldex2-group-col STR        Metadata column used as grouping variable"
   echo "  --aldex2-use-mc TRUE|FALSE    Use scale simulation in aldex.clr"
+  echo "  --aldex2-env-name STR         Conda env name for ALDEx2 step (default: smorf_aldex2_env)"
   echo
   exit 0
 }
@@ -564,6 +566,7 @@ while [[ $# -gt 0 ]]; do
       --aldex2-min-samples) ALDEX2_MIN_SAMPLES="$2"; shift 2 ;;
       --aldex2-group-col) ALDEX2_GROUP_COL="$2"; shift 2 ;;
       --aldex2-use-mc) ALDEX2_USE_MC="$2"; shift 2 ;;
+      --aldex2-env-name) ALDEX2_ENV_NAME="$2"; shift 2 ;;
 
     *) echo "Unknown argument: $1"; usage ;;
   esac
@@ -1036,7 +1039,7 @@ if [[ "${RUN_ALDEX2_DA}" -eq 1 ]]; then
     --cpus "$CPUS"
     --mem "$MEM"
     --wd "$WDIR"
-    --env-name "$ABUND_ENV_NAME"
+    --env-name "$ALDEX2_ENV_NAME"
     --stats-root "$ALDEX2_DA_STATS_ROOT"
     --outdir "$ALDEX2_DA_OUTDIR"
     --envs "$ALDEX2_DA_ENVS"
