@@ -1027,6 +1027,62 @@ GLOBAL NR CDS REFERENCE
 # 18) Build GLOBAL representative CDS catalog from MMseq clusters
 bash workflow/runall.sh \
   --build-global-rep-cds
+
+# 19) Run full differential abundance workflow
+#     (prepare count matrix + run ALDEx2)
+
+bash workflow/runall.sh \
+  --aldex2-da-only
+
+# 20) Check or install ALDEx2 in abundance environment
+
+bash workflow/runall.sh \
+  --aldex2-check-install-only
+
+
+# 21) Generate mapping summary plots only
+#     (mapped %, primary mapped %, MAPQ ≥ 20 filtering)
+
+bash workflow/runall.sh \
+  --aldex2-flagstat-only
+
+
+# 22) Prepare count matrix + metadata only
+
+bash workflow/runall.sh \
+  --aldex2-prepare-only
+
+
+# 23) Run statistical testing only
+#     (requires prepared count matrix)
+
+bash workflow/runall.sh \
+  --aldex2-only
+
+# 24) Increase Monte Carlo precision
+
+bash workflow/runall.sh \
+  --aldex2-da-only \
+  --aldex2-mc-samples 256
+
+# 25) Modify filtering thresholds
+
+bash workflow/runall.sh \
+  --aldex2-da-only \
+  --aldex2-min-count 20 \
+  --aldex2-min-samples 3
+
+# 26) Specify environments explicitly
+
+bash workflow/runall.sh \
+  --aldex2-da-only \
+  --aldex2-envs uniforme,riparia,peneira,campina
+
+# 27) Custom output directory
+
+bash workflow/runall.sh \
+  --aldex2-da-only \
+  --aldex2-outdir results/custom_aldex2
 </pre>
 
 <pre>
