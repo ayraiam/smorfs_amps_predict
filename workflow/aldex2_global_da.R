@@ -106,6 +106,8 @@ plot_flagstat_stripchart <- function(summary_dt, out_png, out_pdf = NULL, width 
       color = "red"
     ) +
     
+    coord_cartesian(ylim = c(0, 1e7)) +
+    
     facet_wrap(~ environment, nrow = 1, scales = "fixed") +
     labs(
       x = NULL,
