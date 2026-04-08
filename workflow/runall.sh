@@ -123,6 +123,21 @@ MAP_GLOBAL_CDS_ONLY=0
 MAP_GLOBAL_CDS_SAMPLE_ID=""
 ABUND_ENV_NAME="smorf_abundance_env"
 
+RUN_ALDEX2_DA=0
+ALDEX2_DA_CHECK_INSTALL_ONLY=0
+ALDEX2_DA_OUTDIR="${RESULTS_DIR}/differential_abundance/aldex2"
+ALDEX2_DA_STATS_ROOT="/scratch/t.sousa/data_used/read_mapping/stats"
+ALDEX2_DA_ENVS="campina,peneira,uniforme,riparia"
+ALDEX2_DA_RUN_FLAGSTAT=1
+ALDEX2_DA_RUN_PREPARE=1
+ALDEX2_DA_RUN_ANALYSIS=1
+ALDEX2_MC_SAMPLES="128"
+ALDEX2_DENOM="all"
+ALDEX2_MIN_COUNT="10"
+ALDEX2_MIN_SAMPLES="2"
+ALDEX2_GROUP_COL="environment"
+ALDEX2_USE_MC="FALSE"
+
 usage() {
   echo "Usage: bash workflow/runall.sh [options]"
   echo
@@ -217,6 +232,21 @@ usage() {
   echo "  --map-global-cds-only         Run only per-library mapping against existing GLOBAL representative CDS FASTA"
   echo "  --map-global-cds-sample-id STR   Restrict mapping to libraries whose basename contains STR"
   echo "  --abund-env-name STR          Conda env name for abundance step (default: smorf_abundance_env)"
+  echo "Differential abundance (ALDEx2):"
+  echo "  --aldex2-da-only              Run only ALDEx2 differential abundance workflow"
+  echo "  --aldex2-check-install-only   Only check/install ALDEx2 in abundance env"
+  echo "  --aldex2-flagstat-only        Only parse flagstats and make mapping percentage plots"
+  echo "  --aldex2-prepare-only         Only prepare ALDEx2 count matrix + metadata"
+  echo "  --aldex2-only                 Only run ALDEx2 on existing prepared inputs"
+  echo "  --aldex2-outdir PATH          Output dir for ALDEx2 results"
+  echo "  --aldex2-stats-root PATH      Root dir with read-mapping stats"
+  echo "  --aldex2-envs STR             Comma-separated environments"
+  echo "  --aldex2-mc-samples INT       ALDEx2 Monte Carlo samples"
+  echo "  --aldex2-denom STR            ALDEx2 denominator (default: all)"
+  echo "  --aldex2-min-count INT        Minimum count threshold for filtering"
+  echo "  --aldex2-min-samples INT      Minimum number of samples passing filter"
+  echo "  --aldex2-group-col STR        Metadata column used as grouping variable"
+  echo "  --aldex2-use-mc TRUE|FALSE    Use scale simulation in aldex.clr"
   echo
   exit 0
 }
@@ -482,6 +512,58 @@ while [[ $# -gt 0 ]]; do
         shift 2
         ;;
       --abund-env-name) ABUND_ENV_NAME="$2"; shift 2 ;;
+      --aldex2-da-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0
+        RUN_ALDEX2_DA=1
+        ALDEX2_DA_RUN_FLAGSTAT=1
+        ALDEX2_DA_RUN_PREPARE=1
+        ALDEX2_DA_RUN_ANALYSIS=1
+        shift 1
+        ;;
+      --aldex2-check-install-only)
+        RUN_ALDEX2_DA=1
+        ALDEX2_DA_CHECK_INSTALL_ONLY=1
+        shift 1
+        ;;
+      --aldex2-flagstat-only)
+        RUN_ALDEX2_DA=1
+        ALDEX2_DA_RUN_FLAGSTAT=1
+        ALDEX2_DA_RUN_PREPARE=0
+        ALDEX2_DA_RUN_ANALYSIS=0
+        shift 1
+        ;;
+      --aldex2-prepare-only)
+        RUN_ALDEX2_DA=1
+        ALDEX2_DA_RUN_FLAGSTAT=0
+        ALDEX2_DA_RUN_PREPARE=1
+        ALDEX2_DA_RUN_ANALYSIS=0
+        shift 1
+        ;;
+      --aldex2-only)
+        RUN_ALDEX2_DA=1
+        ALDEX2_DA_RUN_FLAGSTAT=0
+        ALDEX2_DA_RUN_PREPARE=0
+        ALDEX2_DA_RUN_ANALYSIS=1
+        shift 1
+        ;;
+      --aldex2-outdir) ALDEX2_DA_OUTDIR="$2"; shift 2 ;;
+      --aldex2-stats-root) ALDEX2_DA_STATS_ROOT="$2"; shift 2 ;;
+      --aldex2-envs) ALDEX2_DA_ENVS="$2"; shift 2 ;;
+      --aldex2-mc-samples) ALDEX2_MC_SAMPLES="$2"; shift 2 ;;
+      --aldex2-denom) ALDEX2_DENOM="$2"; shift 2 ;;
+      --aldex2-min-count) ALDEX2_MIN_COUNT="$2"; shift 2 ;;
+      --aldex2-min-samples) ALDEX2_MIN_SAMPLES="$2"; shift 2 ;;
+      --aldex2-group-col) ALDEX2_GROUP_COL="$2"; shift 2 ;;
+      --aldex2-use-mc) ALDEX2_USE_MC="$2"; shift 2 ;;
 
     *) echo "Unknown argument: $1"; usage ;;
   esac
@@ -944,6 +1026,43 @@ if [[ "${RUN_DOWNSTREAM}" -eq 1 ]]; then
     /bin/bash workflow/downstream_analysis.sh \
       "${DS_ARGS[@]}" \
     >>"$DS_OUT_LOG" 2>>"$DS_ERR_LOG"
+fi
+
+if [[ "${RUN_ALDEX2_DA}" -eq 1 ]]; then
+  echo ">>> Running ALDEx2 differential abundance workflow ..." | tee -a "$OUT_LOG" "$CMD_LOG"
+  DA_ARGS=(
+    --partition "$PARTITION"
+    --time "$TIME"
+    --cpus "$CPUS"
+    --mem "$MEM"
+    --wd "$WDIR"
+    --env-name "$ABUND_ENV_NAME"
+    --stats-root "$ALDEX2_DA_STATS_ROOT"
+    --outdir "$ALDEX2_DA_OUTDIR"
+    --envs "$ALDEX2_DA_ENVS"
+    --mc-samples "$ALDEX2_MC_SAMPLES"
+    --denom "$ALDEX2_DENOM"
+    --min-count "$ALDEX2_MIN_COUNT"
+    --min-samples "$ALDEX2_MIN_SAMPLES"
+    --group-col "$ALDEX2_GROUP_COL"
+    --use-mc "$ALDEX2_USE_MC"
+  )
+
+  if [[ "${ALDEX2_DA_CHECK_INSTALL_ONLY}" -eq 1 ]]; then
+    DA_ARGS+=(--check-install-only)
+  else
+    if [[ "${ALDEX2_DA_RUN_FLAGSTAT}" -eq 1 && "${ALDEX2_DA_RUN_PREPARE}" -eq 1 && "${ALDEX2_DA_RUN_ANALYSIS}" -eq 1 ]]; then
+      DA_ARGS+=(--all)
+    elif [[ "${ALDEX2_DA_RUN_FLAGSTAT}" -eq 1 ]]; then
+      DA_ARGS+=(--flagstat-only)
+    elif [[ "${ALDEX2_DA_RUN_PREPARE}" -eq 1 ]]; then
+      DA_ARGS+=(--prepare-only)
+    elif [[ "${ALDEX2_DA_RUN_ANALYSIS}" -eq 1 ]]; then
+      DA_ARGS+=(--aldex2-only)
+    fi
+  fi
+
+  bash workflow/run_differential_abundance_aldex2.sh "${DA_ARGS[@]}" >>"$OUT_LOG" 2>>"$ERR_LOG"
 fi
 
 echo ">>> Pipeline finished."
