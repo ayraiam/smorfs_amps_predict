@@ -137,10 +137,11 @@ plot_flagstat_stripchart <- function(summary_dt, out_png, out_pdf = NULL, width 
     geom_jitter(width = 0.18, height = 0, alpha = 0.5, size = 2) +
     stat_summary(
       fun = mean,
-      geom = "crossbar",
-      width = 0.5,
-      fatten = 0,
-      color = "red"
+      geom = "errorbar",
+      aes(ymin = after_stat(y), ymax = after_stat(y)),
+      width = 0.4,
+      color = "red",
+      linewidth = 0.8
     ) +
     facet_wrap(~ environment, nrow = 1, scales = "fixed") +
     labs(
