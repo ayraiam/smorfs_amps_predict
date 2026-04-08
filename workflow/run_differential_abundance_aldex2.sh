@@ -8,7 +8,7 @@ MEM="${MEM:-32G}"
 WDIR="${WDIR:-$PWD}"
 
 ENV_PREFIX_DIR="${ENV_PREFIX_DIR:-envs}"
-ABUND_ENV_NAME="${ABUND_ENV_NAME:-smorf_abundance_env}"
+ABUND_ENV_NAME="${ABUND_ENV_NAME:-smorf_aldex2_env}"
 ENV_PREFIX="${ENV_PREFIX_DIR}/${ABUND_ENV_NAME}"
 
 READ_MAPPING_STATS_ROOT="${READ_MAPPING_STATS_ROOT:-/scratch/t.sousa/data_used/read_mapping/stats}"
@@ -56,7 +56,7 @@ Options:
   --env-prefix-dir PATH
   --stats-root PATH
   --outdir PATH
-  --envs STR                  Comma-separated, e.g. campina,peneira,uniforme,riparia
+  --envs STR
   --counts-tsv PATH
   --metadata-tsv PATH
   --mc-samples INT
@@ -129,95 +129,50 @@ init_conda() {
   die "conda not found"
 }
 
-ensure_env_prefix_exists() {
-  [[ -d "$ENV_PREFIX" ]] || die "Env prefix not found: $ENV_PREFIX"
+ensure_env_dir() {
+  init_conda
+  mkdir -p "$ENV_PREFIX_DIR"
 }
 
-conda_install_into_env() {
+create_aldex2_env_if_missing() {
+  ensure_env_dir
+
+  if [[ -d "$ENV_PREFIX" && -x "$ENV_PREFIX/bin/Rscript" ]]; then
+    log "ALDEx2 env already exists: $ENV_PREFIX"
+    return 0
+  fi
+
   local installer="conda"
   if have_cmd mamba; then
     installer="mamba"
   fi
 
-  log "Installing into env: $ENV_PREFIX"
-  log "Packages: $*"
+  log "Creating dedicated ALDEx2 env at: $ENV_PREFIX"
+  "${installer}" create -y -p "$ENV_PREFIX" -c conda-forge -c bioconda \
+    r-base r-data.table r-ggplot2 bioconductor-aldex2
 
-  "${installer}" install -y -p "$ENV_PREFIX" -c conda-forge -c bioconda "$@"
+  [[ -x "$ENV_PREFIX/bin/Rscript" ]] || die "Failed to create ALDEx2 env at $ENV_PREFIX"
 }
 
 activate_env() {
   init_conda
-  ensure_env_prefix_exists
+  [[ -d "$ENV_PREFIX" ]] || die "Env prefix not found: $ENV_PREFIX"
   conda activate "$ENV_PREFIX"
 }
 
-ensure_rscript() {
+ensure_aldex2_stack() {
+  create_aldex2_env_if_missing
   activate_env
-  if have_cmd Rscript; then
-    log "Rscript found in env"
-    return 0
-  fi
 
-  log "Rscript not found in env. Installing r-base..."
-  conda_install_into_env r-base
-  conda activate "$ENV_PREFIX"
-  have_cmd Rscript || die "Rscript still not found after installing r-base into $ENV_PREFIX"
-  log "Rscript installed successfully"
-}
-
-ensure_r_packages_cran() {
-  ensure_rscript
-
-  log "Checking/installing CRAN R packages needed by aldex2_global_da.R"
+  log "Checking required R packages inside ${ENV_PREFIX}"
   Rscript - <<'RS'
-options(repos = c(CRAN = "https://cloud.r-project.org"))
-
-needed <- c("optparse", "data.table", "ggplot2")
+needed <- c("data.table", "ggplot2", "ALDEx2")
 missing <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
-
-if (!requireNamespace("BiocManager", quietly = TRUE)) {
-  install.packages("BiocManager")
-}
-
 if (length(missing) > 0) {
-  install.packages(missing)
-}
-
-still_missing <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
-if (length(still_missing) > 0) {
-  cat("Missing CRAN packages after install:", paste(still_missing, collapse=", "), "\n")
+  cat("Missing R packages:", paste(missing, collapse = ", "), "\n")
   quit(status = 1)
 }
-
-cat("CRAN packages OK\n")
-RS
-}
-
-ensure_aldex2() {
-  ensure_r_packages_cran
-
-  log "Checking ALDEx2 inside ${ENV_PREFIX}"
-  if Rscript -e 'quit(status = !requireNamespace("ALDEx2", quietly = TRUE))'; then
-    log "ALDEx2 already installed"
-    Rscript -e 'cat("ALDEx2 version:", as.character(utils::packageVersion("ALDEx2")), "\n")'
-    return 0
-  fi
-
-  log "ALDEx2 not found. Installing from Bioconductor..."
-  Rscript - <<'RS'
-options(repos = c(CRAN = "https://cloud.r-project.org"))
-
-if (!requireNamespace("BiocManager", quietly = TRUE)) {
-  install.packages("BiocManager")
-}
-
-BiocManager::install("ALDEx2", ask = FALSE, update = FALSE)
-
-if (!requireNamespace("ALDEx2", quietly = TRUE)) {
-  quit(status = 1)
-}
-
-cat("ALDEx2 installed successfully\n")
+cat("R package stack OK\n")
 cat("ALDEx2 version:", as.character(utils::packageVersion("ALDEx2")), "\n")
 RS
 }
@@ -261,7 +216,7 @@ main() {
   log "USE_MC                  : $USE_MC"
   log "============================================"
 
-  ensure_aldex2
+  ensure_aldex2_stack
 
   if [[ "$CHECK_INSTALL_ONLY" -eq 1 ]]; then
     log "Check/install only requested. Exiting."
