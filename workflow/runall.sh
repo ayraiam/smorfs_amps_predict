@@ -532,28 +532,97 @@ while [[ $# -gt 0 ]]; do
         shift 1
         ;;
       --aldex2-check-install-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0
+
         RUN_ALDEX2_DA=1
         ALDEX2_DA_CHECK_INSTALL_ONLY=1
+        ALDEX2_DA_RUN_FLAGSTAT=0
+        ALDEX2_DA_RUN_PREPARE=0
+        ALDEX2_DA_RUN_ANALYSIS=0
         shift 1
         ;;
       --aldex2-flagstat-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0
+
         RUN_ALDEX2_DA=1
+        ALDEX2_DA_CHECK_INSTALL_ONLY=0
         ALDEX2_DA_RUN_FLAGSTAT=1
         ALDEX2_DA_RUN_PREPARE=0
         ALDEX2_DA_RUN_ANALYSIS=0
         shift 1
         ;;
       --aldex2-prepare-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0
+
         RUN_ALDEX2_DA=1
+        ALDEX2_DA_CHECK_INSTALL_ONLY=0
         ALDEX2_DA_RUN_FLAGSTAT=0
         ALDEX2_DA_RUN_PREPARE=1
         ALDEX2_DA_RUN_ANALYSIS=0
         shift 1
         ;;
       --aldex2-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0
+
         RUN_ALDEX2_DA=1
+        ALDEX2_DA_CHECK_INSTALL_ONLY=0
         ALDEX2_DA_RUN_FLAGSTAT=0
         ALDEX2_DA_RUN_PREPARE=0
+        ALDEX2_DA_RUN_ANALYSIS=1
+        shift 1
+        ;;
+      --aldex2-da-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0
+
+        RUN_ALDEX2_DA=1
+        ALDEX2_DA_CHECK_INSTALL_ONLY=0
+        ALDEX2_DA_RUN_FLAGSTAT=1
+        ALDEX2_DA_RUN_PREPARE=1
         ALDEX2_DA_RUN_ANALYSIS=1
         shift 1
         ;;
