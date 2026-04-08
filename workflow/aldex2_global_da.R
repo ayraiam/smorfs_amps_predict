@@ -86,22 +86,32 @@ collect_flagstat_summary <- function(
 
   out <- rbindlist(all_rows, fill = TRUE)
   out[, environment := factor(environment, levels = envs)]
-  out[, metric := factor(metric, levels = c("mapped", "primary_mapped", "mapped_q20", "primary_mapped_q20"))]
+  out <- out[metric != "mapped_q20"]
+  out[, metric := factor(metric, levels = c("mapped", "primary_mapped", "primary_mapped_q20"))]
   out[]
 }
 
 plot_flagstat_stripchart <- function(summary_dt, out_png, out_pdf = NULL, width = 9, height = 5) {
   dir_create(dirname(out_png))
   if (!is.null(out_pdf)) dir_create(dirname(out_pdf))
-
-  p <- ggplot(summary_dt, aes(x = metric, y = pct)) +
-    geom_jitter(width = 0.18, height = 0, alpha = 0.8, size = 2) +
+  
+  p <- ggplot(summary_dt, aes(x = metric, y = count)) +
+    geom_jitter(width = 0.18, height = 0, alpha = 0.5, size = 2) +
+    
+    stat_summary(
+      fun = mean,
+      geom = "crossbar",
+      width = 0.5,
+      fatten = 0,
+      color = "red"
+    ) +
+    
     facet_wrap(~ environment, nrow = 1, scales = "fixed") +
     labs(
       x = NULL,
-      y = "Mapped reads (%)",
+      y = "Mapped reads (count)",
       title = "Read-mapping summary by library",
-      subtitle = "Percentages parsed from samtools flagstat outputs"
+      subtitle = "Raw counts parsed from samtools flagstat outputs"
     ) +
     theme_bw(base_size = 12) +
     theme(
@@ -109,9 +119,10 @@ plot_flagstat_stripchart <- function(summary_dt, out_png, out_pdf = NULL, width 
       strip.background = element_rect(fill = "grey95"),
       panel.grid.minor = element_blank()
     )
-
+  
   ggsave(out_png, p, width = width, height = height, dpi = 300)
   if (!is.null(out_pdf)) ggsave(out_pdf, p, width = width, height = height)
+  
   invisible(p)
 }
 
