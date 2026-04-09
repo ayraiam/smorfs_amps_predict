@@ -295,9 +295,8 @@ run_aldex2_kw <- function(
   rownames(counts_mat) <- counts_filt$feature_id
   storage.mode(counts_mat) <- "integer"
 
-  groups <- factor(meta_dt[[group_col]])
-  names(groups) <- meta_dt$sample_name
-
+  groups <- as.character(meta_dt[[group_col]])
+  
   clr <- ALDEx2::aldex.clr(
     reads = counts_mat,
     conds = groups,
