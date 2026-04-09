@@ -57,7 +57,6 @@ collect_flagstat_summary <- function(
   
   for (env in envs) {
     env_dir <- file.path(stats_root, env)
-    
     if (!dir.exists(env_dir)) {
       warning(sprintf("Environment directory not found, skipping: %s", env_dir))
       next
@@ -82,29 +81,31 @@ collect_flagstat_summary <- function(
         dt_sorted <- read_flagstat_file(sorted_file)
         dt_q20 <- read_flagstat_file(q20_file)
         
+        # denominator must ALWAYS come from the plain "primary" line
         total_primary <- dt_sorted[metric == "primary", count][1]
-        mapped_count <- dt_sorted[metric == "mapped", count][1]
-        primary_mapped_count <- dt_sorted[metric == "primary_mapped", count][1]
-        primary_mapped_q20_count <- dt_q20[metric == "primary_mapped", count][1]
+        
+        mapped_row <- dt_sorted[metric == "mapped"][1]
+        primary_mapped_row <- dt_sorted[metric == "primary_mapped"][1]
+        q20_primary_mapped_row <- dt_q20[metric == "primary_mapped"][1]
         
         dt <- rbindlist(list(
           data.table(
             metric = "mapped",
-            count = mapped_count,
+            count = mapped_row$count,
             total = total_primary,
-            pct = 100 * mapped_count / total_primary
+            pct = mapped_row$pct
           ),
           data.table(
             metric = "primary_mapped",
-            count = primary_mapped_count,
+            count = primary_mapped_row$count,
             total = total_primary,
-            pct = 100 * primary_mapped_count / total_primary
+            pct = primary_mapped_row$pct
           ),
           data.table(
             metric = "primary_mapped_q20",
-            count = primary_mapped_q20_count,
+            count = q20_primary_mapped_row$count,
             total = total_primary,
-            pct = 100 * primary_mapped_q20_count / total_primary
+            pct = 100 * q20_primary_mapped_row$count / total_primary
           )
         ), fill = TRUE)
         
