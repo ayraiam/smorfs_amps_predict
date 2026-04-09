@@ -138,7 +138,7 @@ plot_flagstat_stripchart <- function(summary_dt, out_png, out_pdf = NULL, width 
   p <- ggplot(summary_dt, aes(x = metric, y = pct)) +
     geom_jitter(width = 0.18, height = 0, alpha = 0.5, size = 2) +
     stat_summary(
-      fun = mean,
+      fun = median,
       geom = "errorbar",
       aes(ymin = after_stat(y), ymax = after_stat(y)),
       width = 0.4,
