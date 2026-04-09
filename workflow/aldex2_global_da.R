@@ -15,21 +15,34 @@ dir_create <- function(path) {
 
 read_flagstat_file <- function(path) {
   txt <- readLines(path, warn = FALSE)
-
+  
   parse_metric <- function(pattern, label) {
     hit <- grep(pattern, txt, value = TRUE)
     if (length(hit) == 0) {
-      return(data.table(metric = label, count = NA_real_, total = NA_real_, pct = NA_real_, line = NA_character_))
+      return(data.table(
+        metric = label,
+        count = NA_real_,
+        total = NA_real_,
+        pct = NA_real_,
+        line = NA_character_
+      ))
     }
+    
     line <- hit[1]
     count <- suppressWarnings(as.numeric(sub("^([0-9]+).*", "\\1", line)))
     pct <- suppressWarnings(as.numeric(sub(".*\\(([0-9.]+)%.*", "\\1", line)))
-    total_line <- grep("in total", txt, value = TRUE)
-    total <- if (length(total_line) > 0) suppressWarnings(as.numeric(sub("^([0-9]+).*", "\\1", total_line[1]))) else NA_real_
-    data.table(metric = label, count = count, total = total, pct = pct, line = line)
+    
+    data.table(
+      metric = label,
+      count = count,
+      total = NA_real_,
+      pct = pct,
+      line = line
+    )
   }
-
+  
   rbindlist(list(
+    parse_metric(" primary$", "primary"),
     parse_metric(" primary mapped ", "primary_mapped"),
     parse_metric(" mapped ", "mapped")
   ), fill = TRUE)
@@ -43,7 +56,6 @@ collect_flagstat_summary <- function(
   k <- 1L
   
   for (env in envs) {
-    
     env_dir <- file.path(stats_root, env)
     
     if (!dir.exists(env_dir)) {
@@ -54,21 +66,14 @@ collect_flagstat_summary <- function(
     sample_dirs <- list.dirs(env_dir, recursive = FALSE, full.names = TRUE)
     
     for (sample_dir in sample_dirs) {
-      
       sorted_files <- Sys.glob(file.path(sample_dir, "*.sorted.flagstat.txt"))
-      
       if (length(sorted_files) == 0) next
       
       for (sorted_file in sorted_files) {
-        
         lib_base <- basename(sorted_file)
         lib_base <- sub("\\.sorted\\.flagstat\\.txt$", "", lib_base)
         
-        q20_file <- file.path(
-          sample_dir,
-          paste0(lib_base, ".primary_q20.flagstat.txt")
-        )
-        
+        q20_file <- file.path(sample_dir, paste0(lib_base, ".primary_q20.flagstat.txt"))
         if (!file.exists(q20_file)) {
           warning(sprintf("Missing paired q20 flagstat for %s", sorted_file))
           next
@@ -77,51 +82,37 @@ collect_flagstat_summary <- function(
         dt_sorted <- read_flagstat_file(sorted_file)
         dt_q20 <- read_flagstat_file(q20_file)
         
-        total_primary <- dt_sorted[
-          metric == "primary_mapped",
-          count
-        ][1]
-        
-        mapped_count <- dt_sorted[
-          metric == "mapped",
-          count
-        ][1]
-        
-        primary_count <- total_primary
-        
-        q20_primary_count <- dt_q20[
-          metric == "primary_mapped",
-          count
-        ][1]
+        total_primary <- dt_sorted[metric == "primary", count][1]
+        mapped_count <- dt_sorted[metric == "mapped", count][1]
+        primary_mapped_count <- dt_sorted[metric == "primary_mapped", count][1]
+        primary_mapped_q20_count <- dt_q20[metric == "primary_mapped", count][1]
         
         dt <- rbindlist(list(
-          
           data.table(
             metric = "mapped",
             count = mapped_count,
             total = total_primary,
             pct = 100 * mapped_count / total_primary
           ),
-          
           data.table(
             metric = "primary_mapped",
-            count = primary_count,
+            count = primary_mapped_count,
             total = total_primary,
-            pct = 100 * primary_count / total_primary
+            pct = 100 * primary_mapped_count / total_primary
           ),
-          
           data.table(
             metric = "primary_mapped_q20",
-            count = q20_primary_count,
+            count = primary_mapped_q20_count,
             total = total_primary,
-            pct = 100 * q20_primary_count / total_primary
+            pct = 100 * primary_mapped_q20_count / total_primary
           )
-          
         ), fill = TRUE)
         
         dt[, environment := env]
         dt[, sample_id := basename(sample_dir)]
         dt[, library_id := lib_base]
+        dt[, sorted_flagstat := sorted_file]
+        dt[, q20_flagstat := q20_file]
         
         all_rows[[k]] <- dt
         k <- k + 1L
@@ -129,19 +120,13 @@ collect_flagstat_summary <- function(
     }
   }
   
+  if (length(all_rows) == 0) {
+    stop("No flagstat files found under the requested environments.", call. = FALSE)
+  }
+  
   out <- rbindlist(all_rows, fill = TRUE)
-  
   out[, environment := factor(environment, levels = envs)]
-  
-  out[, metric := factor(
-    metric,
-    levels = c(
-      "mapped",
-      "primary_mapped",
-      "primary_mapped_q20"
-    )
-  )]
-  
+  out[, metric := factor(metric, levels = c("mapped", "primary_mapped", "primary_mapped_q20"))]
   out[]
 }
 
