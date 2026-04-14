@@ -3,7 +3,6 @@
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)
-  library(edgeR)
 })
 
 log_msg <- function(...) {
@@ -247,7 +246,7 @@ prepare_aldex2_input <- function(
   list(counts = counts_dt, metadata = meta_dt)
 }
 
-filter_low_information_cds <- function(counts_dt, min_count = 10, min_samples = 2) {
+filter_low_information_cds <- function(counts_dt, min_count = 15, min_samples = 5) {
   mat <- as.matrix(counts_dt[, -1, with = FALSE])
   keep <- rowSums(mat >= min_count, na.rm = TRUE) >= min_samples
   filtered <- counts_dt[keep]
@@ -258,36 +257,6 @@ filter_low_information_cds <- function(counts_dt, min_count = 10, min_samples = 
     min_count = min_count,
     min_samples = min_samples
   )
-  list(counts = filtered, stats = stats)
-}
-
-filter_by_expr_cds <- function(counts_dt, meta_dt, group_col = "environment", min_count = 15) {
-  if (!(group_col %in% names(meta_dt))) {
-    stop(sprintf("group_col '%s' not found in metadata.", group_col), call. = FALSE)
-  }
-  
-  mat <- data.matrix(counts_dt[, -1, with = FALSE])
-  rownames(mat) <- counts_dt$feature_id
-  storage.mode(mat) <- "integer"
-  
-  group <- factor(meta_dt[[group_col]])
-  
-  keep <- edgeR::filterByExpr(
-    y = mat,
-    group = group,
-    min.count = min_count
-  )
-  
-  filtered <- counts_dt[keep]
-  
-  stats <- data.table(
-    n_features_before_filterByExpr = nrow(counts_dt),
-    n_features_after_filterByExpr = nrow(filtered),
-    n_removed_by_filterByExpr = sum(!keep),
-    group_col = group_col,
-    min_count_passed_to_filterByExpr = min_count
-  )
-  
   list(counts = filtered, stats = stats)
 }
 
@@ -318,30 +287,19 @@ run_aldex2_kw <- function(
   meta_dt <- meta_dt[match(sample_cols, sample_name)]
   counts_dt <- counts_dt[, c("feature_id", meta_dt$sample_name), with = FALSE]
 
-  # -------------------------------------------------
-  # first filter: simple abundance/prevalence filter
-  # -------------------------------------------------
-  filt1 <- filter_low_information_cds(
+  filt <- filter_low_information_cds(
     counts_dt,
     min_count = min_count,
     min_samples = min_samples
   )
-  gc()
-  # -------------------------------------------------
-  # second filter: design-aware edgeR::filterByExpr
-  # -------------------------------------------------
-  filt2 <- filter_by_expr_cds(
-    counts_dt = filt1$counts,
-    meta_dt = meta_dt,
-    group_col = group_col,
-    min_count = min_count
-  )
-  gc()
-  # save combined filtering summary
-  filter_stats <- cbind(filt1$stats, filt2$stats)
-  fwrite(filter_stats, file.path(outdir, "aldex2_filtering_summary.tsv"), sep = "\t")
   
-  counts_filt <- filt2$counts
+  fwrite(
+    filt$stats,
+    file.path(outdir, "aldex2_filtering_summary.tsv"),
+    sep = "\t"
+  )
+  
+  counts_filt <- filt$counts
   counts_mat <- as.matrix(counts_filt[, -1, with = FALSE])
   rownames(counts_mat) <- counts_filt$feature_id
   storage.mode(counts_mat) <- "integer"
