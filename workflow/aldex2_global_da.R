@@ -266,7 +266,7 @@ filter_by_expr_cds <- function(counts_dt, meta_dt, group_col = "environment", mi
     stop(sprintf("group_col '%s' not found in metadata.", group_col), call. = FALSE)
   }
   
-  mat <- as.matrix(counts_dt[, -1, with = FALSE])
+  mat <- data.matrix(counts_dt[, -1, with = FALSE])
   rownames(mat) <- counts_dt$feature_id
   storage.mode(mat) <- "integer"
   
@@ -326,7 +326,7 @@ run_aldex2_kw <- function(
     min_count = min_count,
     min_samples = min_samples
   )
-  
+  gc()
   # -------------------------------------------------
   # second filter: design-aware edgeR::filterByExpr
   # -------------------------------------------------
@@ -336,7 +336,7 @@ run_aldex2_kw <- function(
     group_col = group_col,
     min_count = min_count
   )
-  
+  gc()
   # save combined filtering summary
   filter_stats <- cbind(filt1$stats, filt2$stats)
   fwrite(filter_stats, file.path(outdir, "aldex2_filtering_summary.tsv"), sep = "\t")
