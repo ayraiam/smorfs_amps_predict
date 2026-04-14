@@ -174,7 +174,7 @@ if (length(missing) > 0) {
 }
 cat("R package stack OK\n")
 cat("ALDEx2 version:", as.character(utils::packageVersion("ALDEx2")), "\n")
-cat("edgeR version:", as.character(utils::packageVersion("edgeR")), "\n")
+#cat("edgeR version:", as.character(utils::packageVersion("edgeR")), "\n")
 RS
 }
 
