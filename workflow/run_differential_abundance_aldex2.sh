@@ -165,45 +165,17 @@ ensure_aldex2_stack() {
   activate_env
 
   log "Checking required R packages inside ${ENV_PREFIX}"
-  set +e
   Rscript - <<'RS'
 needed <- c("data.table", "ggplot2", "ALDEx2", "edgeR")
 missing <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing) > 0) {
   cat("Missing R packages:", paste(missing, collapse = ", "), "\n")
-  quit(status = 11)
+  quit(status = 1)
 }
 cat("R package stack OK\n")
 cat("ALDEx2 version:", as.character(utils::packageVersion("ALDEx2")), "\n")
 cat("edgeR version:", as.character(utils::packageVersion("edgeR")), "\n")
 RS
-  local r_status=$?
-  set -e
-
-  if [[ "$r_status" -eq 11 ]]; then
-    log "edgeR or another required package is missing. Installing into existing env: ${ENV_PREFIX}"
-    local installer="conda"
-    if have_cmd mamba; then
-      installer="mamba"
-    fi
-
-    "${installer}" install -y -p "$ENV_PREFIX" -c conda-forge -c bioconda bioconductor-edger
-
-    activate_env
-    Rscript - <<'RS'
-needed <- c("data.table", "ggplot2", "ALDEx2", "edgeR")
-missing <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
-if (length(missing) > 0) {
-  cat("Still missing R packages:", paste(missing, collapse = ", "), "\n")
-  quit(status = 1)
-}
-cat("R package stack OK after install\n")
-cat("ALDEx2 version:", as.character(utils::packageVersion("ALDEx2")), "\n")
-cat("edgeR version:", as.character(utils::packageVersion("edgeR")), "\n")
-RS
-  elif [[ "$r_status" -ne 0 ]]; then
-    die "R package check failed"
-  fi
 }
 
 check_workflow_script() {
