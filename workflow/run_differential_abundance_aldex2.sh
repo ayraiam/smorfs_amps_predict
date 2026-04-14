@@ -166,7 +166,7 @@ ensure_aldex2_stack() {
 
   log "Checking required R packages inside ${ENV_PREFIX}"
   Rscript - <<'RS'
-needed <- c("data.table", "ggplot2", "ALDEx2", "edgeR")
+needed <- c("data.table", "ggplot2", "ALDEx2")
 missing <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing) > 0) {
   cat("Missing R packages:", paste(missing, collapse = ", "), "\n")
