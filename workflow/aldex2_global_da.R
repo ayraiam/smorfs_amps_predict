@@ -181,33 +181,33 @@ prepare_aldex2_input <- function(
     envs = c("campina", "peneira", "uniforme", "riparia"),
     outdir,
     remove_star = TRUE) {
-
+  
   dir_create(outdir)
   idx_list <- list()
   meta_list <- list()
   k <- 1L
-
+  
   for (env in envs) {
     env_dir <- file.path(stats_root, env)
     if (!dir.exists(env_dir)) {
       warning(sprintf("Environment directory not found, skipping: %s", env_dir))
       next
     }
-
+    
     sample_dirs <- list.dirs(env_dir, recursive = FALSE, full.names = TRUE)
     for (sample_dir in sample_dirs) {
       idx_files <- Sys.glob(file.path(sample_dir, "*.primary_q20.idxstats.tsv"))
       if (length(idx_files) == 0) next
-
+      
       for (idx in idx_files) {
         sample_name <- basename(idx)
         sample_name <- sub("\\.primary_q20\\.idxstats\\.tsv$", "", sample_name)
-
+        
         dt <- fread(idx, sep = "\t", header = FALSE, col.names = c("feature_id", "feature_length", "mapped", "unmapped"))
         if (remove_star) dt <- dt[feature_id != "*"]
         dt <- dt[, .(feature_id, count = as.numeric(mapped))]
         setnames(dt, "count", sample_name)
-
+        
         idx_list[[k]] <- dt
         meta_list[[k]] <- data.table(
           sample_name = sample_name,
@@ -219,28 +219,28 @@ prepare_aldex2_input <- function(
       }
     }
   }
-
+  
   if (length(idx_list) == 0) stop("No *.primary_q20.idxstats.tsv files found.", call. = FALSE)
-
+  
   counts_dt <- Reduce(function(x, y) merge(x, y, by = "feature_id", all = TRUE), idx_list)
   for (j in seq_along(counts_dt)) {
     if (is.numeric(counts_dt[[j]])) data.table::set(counts_dt, which(is.na(counts_dt[[j]])), j, 0)
   }
-
+  
   meta_dt <- rbindlist(meta_list, fill = TRUE)
   meta_dt[, environment := factor(environment, levels = envs)]
-
+  
   sample_cols <- setdiff(names(counts_dt), "feature_id")
   missing_meta <- setdiff(sample_cols, meta_dt$sample_name)
   if (length(missing_meta) > 0) stop(sprintf("Metadata missing for samples: %s", paste(missing_meta, collapse = ", ")), call. = FALSE)
-
+  
   meta_dt <- meta_dt[match(sample_cols, sample_name)]
-
+  
   counts_out <- file.path(outdir, "aldex2_counts_matrix.tsv")
   meta_out <- file.path(outdir, "aldex2_sample_metadata.tsv")
   fwrite(counts_dt, counts_out, sep = "\t")
   fwrite(meta_dt, meta_out, sep = "\t")
-
+  
   log_msg("Counts matrix: %s", counts_out)
   log_msg("Metadata table: %s", meta_out)
   list(counts = counts_dt, metadata = meta_dt)
@@ -270,41 +270,32 @@ run_aldex2_kw <- function(
     min_count = 15,
     min_samples = 5,
     use_mc = FALSE) {
-
+  
   if (!requireNamespace("ALDEx2", quietly = TRUE)) stop("ALDEx2 is not installed in the active R environment.", call. = FALSE)
-
+  
   dir_create(outdir)
   counts_dt <- fread(counts_tsv)
   meta_dt <- fread(metadata_tsv)
-
+  
   if (!(group_col %in% names(meta_dt))) stop(sprintf("group_col '%s' not found in metadata.", group_col), call. = FALSE)
   if (!("sample_name" %in% names(meta_dt))) stop("Metadata must contain a 'sample_name' column.", call. = FALSE)
   if (!("feature_id" %in% names(counts_dt))) stop("Counts table must contain a 'feature_id' column.", call. = FALSE)
-
+  
   sample_cols <- setdiff(names(counts_dt), "feature_id")
   if (!setequal(sample_cols, meta_dt$sample_name)) stop("Sample names in counts matrix and metadata do not match.", call. = FALSE)
-
+  
   meta_dt <- meta_dt[match(sample_cols, sample_name)]
   counts_dt <- counts_dt[, c("feature_id", meta_dt$sample_name), with = FALSE]
-
-  filt <- filter_low_information_cds(
-    counts_dt,
-    min_count = min_count,
-    min_samples = min_samples
-  )
   
-  fwrite(
-    filt$stats,
-    file.path(outdir, "aldex2_filtering_summary.tsv"),
-    sep = "\t"
-  )
+  filt <- filter_low_information_cds(counts_dt, min_count = min_count, min_samples = min_samples)
+  fwrite(filt$stats, file.path(outdir, "aldex2_filtering_summary.tsv"), sep = "\t")
   
   counts_filt <- filt$counts
   counts_mat <- as.matrix(counts_filt[, -1, with = FALSE])
   rownames(counts_mat) <- counts_filt$feature_id
   storage.mode(counts_mat) <- "integer"
   
-  groups <- factor(meta_dt[[group_col]])
+  groups <- as.character(meta_dt[[group_col]])
   
   clr <- ALDEx2::aldex.clr(
     reads = counts_mat,
@@ -314,9 +305,9 @@ run_aldex2_kw <- function(
     useMC = use_mc,
     verbose = TRUE
   )
-
+  
   kw <- ALDEx2::aldex.kw(clr, useMC = use_mc, verbose = TRUE)
-
+  
   results_dt <- data.table(feature_id = rownames(kw), kw)
   raw_mean <- data.table(
     feature_id = counts_filt$feature_id,
@@ -325,7 +316,7 @@ run_aldex2_kw <- function(
   )
   results_dt <- merge(results_dt, raw_mean, by = "feature_id", all.x = TRUE)
   setorder(results_dt, kw.eBH, kw.ep)
-
+  
   fwrite(results_dt, file.path(outdir, "aldex2_kw_results.tsv"), sep = "\t")
   fwrite(meta_dt, file.path(outdir, "aldex2_metadata_used.tsv"), sep = "\t")
   fwrite(data.table(
@@ -339,7 +330,7 @@ run_aldex2_kw <- function(
     min_samples = min_samples,
     use_mc = use_mc
   ), file.path(outdir, "aldex2_run_parameters.tsv"), sep = "\t")
-
+  
   log_msg("ALDEx2 results written to %s", file.path(outdir, "aldex2_kw_results.tsv"))
   invisible(results_dt)
 }
@@ -367,21 +358,21 @@ parse_args <- function(args) {
     key <- args[[i]]
     val <- if (i < length(args)) args[[i + 1L]] else NA_character_
     switch(key,
-      "-h" = { out$help <- TRUE; i <- i + 1L },
-      "--help" = { out$help <- TRUE; i <- i + 1L },
-      "--step" = { out$step <- val; i <- i + 2L },
-      "--stats-root" = { out$stats_root <- val; i <- i + 2L },
-      "--outdir" = { out$outdir <- val; i <- i + 2L },
-      "--envs" = { out$envs <- strsplit(val, ",", fixed = TRUE)[[1]]; i <- i + 2L },
-      "--counts-tsv" = { out$counts_tsv <- val; i <- i + 2L },
-      "--metadata-tsv" = { out$metadata_tsv <- val; i <- i + 2L },
-      "--group-col" = { out$group_col <- val; i <- i + 2L },
-      "--mc-samples" = { out$mc_samples <- as.integer(val); i <- i + 2L },
-      "--denom" = { out$denom <- val; i <- i + 2L },
-      "--min-count" = { out$min_count <- as.integer(val); i <- i + 2L },
-      "--min-samples" = { out$min_samples <- as.integer(val); i <- i + 2L },
-      "--use-mc" = { out$use_mc <- toupper(val) %in% c("TRUE", "T", "1"); i <- i + 2L },
-      stop(sprintf("Unknown argument: %s", key), call. = FALSE)
+           "-h" = { out$help <- TRUE; i <- i + 1L },
+           "--help" = { out$help <- TRUE; i <- i + 1L },
+           "--step" = { out$step <- val; i <- i + 2L },
+           "--stats-root" = { out$stats_root <- val; i <- i + 2L },
+           "--outdir" = { out$outdir <- val; i <- i + 2L },
+           "--envs" = { out$envs <- strsplit(val, ",", fixed = TRUE)[[1]]; i <- i + 2L },
+           "--counts-tsv" = { out$counts_tsv <- val; i <- i + 2L },
+           "--metadata-tsv" = { out$metadata_tsv <- val; i <- i + 2L },
+           "--group-col" = { out$group_col <- val; i <- i + 2L },
+           "--mc-samples" = { out$mc_samples <- as.integer(val); i <- i + 2L },
+           "--denom" = { out$denom <- val; i <- i + 2L },
+           "--min-count" = { out$min_count <- as.integer(val); i <- i + 2L },
+           "--min-samples" = { out$min_samples <- as.integer(val); i <- i + 2L },
+           "--use-mc" = { out$use_mc <- toupper(val) %in% c("TRUE", "T", "1"); i <- i + 2L },
+           stop(sprintf("Unknown argument: %s", key), call. = FALSE)
     )
   }
   out
@@ -389,11 +380,11 @@ parse_args <- function(args) {
 
 print_help <- function() {
   cat(
-"Usage: Rscript workflow/aldex2_global_da.R --step <flagstat|prepare|run> [options]\n\n",
-"Steps:\n",
-"  --step flagstat   Parse flagstat files and generate stripchart\n",
-"  --step prepare    Build ALDEx2 counts matrix + metadata from idxstats\n",
-"  --step run        Run ALDEx2 Kruskal-Wallis workflow on prepared input\n"
+    "Usage: Rscript workflow/aldex2_global_da.R --step <flagstat|prepare|run> [options]\n\n",
+    "Steps:\n",
+    "  --step flagstat   Parse flagstat files and generate stripchart\n",
+    "  --step prepare    Build ALDEx2 counts matrix + metadata from idxstats\n",
+    "  --step run        Run ALDEx2 Kruskal-Wallis workflow on prepared input\n"
   )
 }
 
