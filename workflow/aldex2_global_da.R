@@ -267,8 +267,8 @@ run_aldex2_kw <- function(
     group_col = "environment",
     mc_samples = 128,
     denom = "all",
-    min_count = 10,
-    min_samples = 2,
+    min_count = 15,
+    min_samples = 5,
     use_mc = FALSE) {
 
   if (!requireNamespace("ALDEx2", quietly = TRUE)) stop("ALDEx2 is not installed in the active R environment.", call. = FALSE)
@@ -348,8 +348,8 @@ parse_args <- function(args) {
     group_col = "environment",
     mc_samples = 128,
     denom = "all",
-    min_count = 10,
-    min_samples = 2,
+    min_count = 15,
+    min_samples = 5,
     use_mc = FALSE,
     help = FALSE
   )
