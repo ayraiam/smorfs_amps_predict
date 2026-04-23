@@ -123,6 +123,20 @@ MAP_GLOBAL_CDS_ONLY=0
 MAP_GLOBAL_CDS_SAMPLE_ID=""
 ABUND_ENV_NAME="smorf_abundance_env"
 ALDEX2_ENV_NAME="smorf_aldex2_env"
+# Optional global CDS functional annotation (OFF by default)
+RUN_ANNOT_GLOBAL_CDS=0
+ANNOT_GLOBAL_CDS_CREATE_ENV=0
+ANNOT_GLOBAL_CDS_ENV="global_cds_annot_env"
+ANNOT_GLOBAL_CDS_INPUT_FNA="${RESULTS_DIR}/abundance/global_cds/reference/global_rep_cds.fna"
+ANNOT_GLOBAL_CDS_OUTDIR="${RESULTS_DIR}/annotation/global_cds"
+ANNOT_GLOBAL_CDS_SWISSPROT_DB=""
+ANNOT_GLOBAL_CDS_PFAM_DB=""
+ANNOT_GLOBAL_CDS_EGGNOG_DATA_DIR=""
+ANNOT_GLOBAL_CDS_STEP_INIT=0
+ANNOT_GLOBAL_CDS_STEP_ORTHOLOGY=0
+ANNOT_GLOBAL_CDS_STEP_DOMAINS=0
+ANNOT_GLOBAL_CDS_STEP_FUNCTIONAL=0
+ANNOT_GLOBAL_CDS_STEP_TAXONOMY=0
 
 RUN_ALDEX2_DA=0
 ALDEX2_DA_CHECK_INSTALL_ONLY=0
@@ -249,6 +263,20 @@ usage() {
   echo "  --aldex2-group-col STR        Metadata column used as grouping variable"
   echo "  --aldex2-use-mc TRUE|FALSE    Use scale simulation in aldex.clr"
   echo "  --aldex2-env-name STR         Conda env name for ALDEx2 step (default: smorf_aldex2_env)"
+  echo "Global CDS annotation:"
+  echo "  --annot-global-cds-create-env    Create env for global CDS annotation and exit"
+  echo "  --annot-global-cds-all           Run init + orthology + domains + functional + taxonomy"
+  echo "  --annot-global-cds-init-only     Initialize proteins FASTA + master annotation TSV"
+  echo "  --annot-global-cds-orthology-only  Run DIAMOND best-hit step only"
+  echo "  --annot-global-cds-domains-only  Run HMMER/Pfam domains step only"
+  echo "  --annot-global-cds-functional-only Run eggNOG functional step only"
+  echo "  --annot-global-cds-taxonomy-only Run taxonomy fill step only"
+  echo "  --annot-global-cds-env STR       Conda env name (default: global_cds_annot_env)"
+  echo "  --annot-global-cds-input-fna P   Input CDS FASTA"
+  echo "  --annot-global-cds-outdir P      Output directory"
+  echo "  --annot-global-cds-swissprot-db P   DIAMOND DB for best-hit search"
+  echo "  --annot-global-cds-pfam-db P        Pfam-A.hmm path (hmmpress'ed)"
+  echo "  --annot-global-cds-eggnog-data P    eggNOG-mapper data dir"
   echo
   exit 0
 }
@@ -636,10 +664,82 @@ while [[ $# -gt 0 ]]; do
       --aldex2-group-col) ALDEX2_GROUP_COL="$2"; shift 2 ;;
       --aldex2-use-mc) ALDEX2_USE_MC="$2"; shift 2 ;;
       --aldex2-env-name) ALDEX2_ENV_NAME="$2"; shift 2 ;;
-
+      --annot-global-cds-create-env)
+        ANNOT_GLOBAL_CDS_CREATE_ENV=1
+        shift 1
+        ;;
+      --annot-global-cds-all)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0
+        RUN_ALDEX2_DA=0
+        RUN_ANNOT_GLOBAL_CDS=1
+        ANNOT_GLOBAL_CDS_STEP_INIT=1
+        ANNOT_GLOBAL_CDS_STEP_ORTHOLOGY=1
+        ANNOT_GLOBAL_CDS_STEP_DOMAINS=1
+        ANNOT_GLOBAL_CDS_STEP_FUNCTIONAL=1
+        ANNOT_GLOBAL_CDS_STEP_TAXONOMY=1
+        shift 1
+        ;;
+      --annot-global-cds-init-only)
+        RUN_QC=0; RUN_ASSEMBLY=0; RUN_METAFlyE=0; RUN_SMORFS=0; RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0; RUN_REFINE_EUKS=0; RUN_METAEUK=0; RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0; RUN_ALDEX2_DA=0; RUN_ANNOT_GLOBAL_CDS=1
+        ANNOT_GLOBAL_CDS_STEP_INIT=1
+        shift 1
+        ;;
+      --annot-global-cds-orthology-only)
+        RUN_QC=0; RUN_ASSEMBLY=0; RUN_METAFlyE=0; RUN_SMORFS=0; RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0; RUN_REFINE_EUKS=0; RUN_METAEUK=0; RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0; RUN_ALDEX2_DA=0; RUN_ANNOT_GLOBAL_CDS=1
+        ANNOT_GLOBAL_CDS_STEP_ORTHOLOGY=1
+        shift 1
+        ;;
+      --annot-global-cds-domains-only)
+        RUN_QC=0; RUN_ASSEMBLY=0; RUN_METAFlyE=0; RUN_SMORFS=0; RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0; RUN_REFINE_EUKS=0; RUN_METAEUK=0; RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0; RUN_ALDEX2_DA=0; RUN_ANNOT_GLOBAL_CDS=1
+        ANNOT_GLOBAL_CDS_STEP_DOMAINS=1
+        shift 1
+        ;;
+      --annot-global-cds-functional-only)
+        RUN_QC=0; RUN_ASSEMBLY=0; RUN_METAFlyE=0; RUN_SMORFS=0; RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0; RUN_REFINE_EUKS=0; RUN_METAEUK=0; RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0; RUN_ALDEX2_DA=0; RUN_ANNOT_GLOBAL_CDS=1
+        ANNOT_GLOBAL_CDS_STEP_FUNCTIONAL=1
+        shift 1
+        ;;
+      --annot-global-cds-taxonomy-only)
+        RUN_QC=0; RUN_ASSEMBLY=0; RUN_METAFlyE=0; RUN_SMORFS=0; RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0; RUN_REFINE_EUKS=0; RUN_METAEUK=0; RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0; RUN_ALDEX2_DA=0; RUN_ANNOT_GLOBAL_CDS=1
+        ANNOT_GLOBAL_CDS_STEP_TAXONOMY=1
+        shift 1
+        ;;
+      --annot-global-cds-env) ANNOT_GLOBAL_CDS_ENV="$2"; shift 2 ;;
+      --annot-global-cds-input-fna) ANNOT_GLOBAL_CDS_INPUT_FNA="$2"; shift 2 ;;
+      --annot-global-cds-outdir) ANNOT_GLOBAL_CDS_OUTDIR="$2"; shift 2 ;;
+      --annot-global-cds-swissprot-db) ANNOT_GLOBAL_CDS_SWISSPROT_DB="$2"; shift 2 ;;
+      --annot-global-cds-pfam-db) ANNOT_GLOBAL_CDS_PFAM_DB="$2"; shift 2 ;;
+      --annot-global-cds-eggnog-data) ANNOT_GLOBAL_CDS_EGGNOG_DATA_DIR="$2"; shift 2 ;;
     *) echo "Unknown argument: $1"; usage ;;
   esac
 done
+
+if [[ "${ANNOT_GLOBAL_CDS_INPUT_FNA}" == "results/abundance/global_cds/reference/global_rep_cds.fna" ]]; then
+  ANNOT_GLOBAL_CDS_INPUT_FNA="${RESULTS_DIR}/abundance/global_cds/reference/global_rep_cds.fna"
+fi
+
+if [[ "${ANNOT_GLOBAL_CDS_OUTDIR}" == "results/annotation/global_cds" ]]; then
+  ANNOT_GLOBAL_CDS_OUTDIR="${RESULTS_DIR}/annotation/global_cds"
+fi
 
 # If user asked for MetaFlye but didn't specify steps, run QC + assembly
 if [[ "${RUN_METAFlyE}" -eq 1 && "${RUN_ASSEMBLY}" -eq 0 ]]; then
@@ -725,6 +825,16 @@ if [[ "${REFINE_EUKS_CREATE_ENV}" -eq 1 ]]; then
     --refine-env "${REFINE_EUKS_ENV}" \
     >>"$OUT_LOG" 2>>"$ERR_LOG"
   echo ">>> Refine euks env creation complete. Exiting as requested (--refine-euks-create-env)." | tee -a "$OUT_LOG" "$CMD_LOG"
+  exit 0
+fi
+
+if [[ "${ANNOT_GLOBAL_CDS_CREATE_ENV}" -eq 1 ]]; then
+  echo ">>> Creating global CDS annotation env" | tee -a "$OUT_LOG" "$CMD_LOG"
+  /bin/bash workflow/run_annotate_global_cds.sh \
+    --create-env \
+    --env-name "${ANNOT_GLOBAL_CDS_ENV}" \
+    >>"$OUT_LOG" 2>>"$ERR_LOG"
+  echo ">>> Global CDS annotation env complete. Exiting as requested." | tee -a "$OUT_LOG" "$CMD_LOG"
   exit 0
 fi
 
@@ -1135,6 +1245,42 @@ if [[ "${RUN_ALDEX2_DA}" -eq 1 ]]; then
   fi
 
   bash workflow/run_differential_abundance_aldex2.sh "${DA_ARGS[@]}" >>"$OUT_LOG" 2>>"$ERR_LOG"
+fi
+
+if [[ "${RUN_ANNOT_GLOBAL_CDS}" -eq 1 ]]; then
+  echo ">>> Running global CDS annotation workflow ..." | tee -a "$OUT_LOG" "$CMD_LOG"
+  AN_ARGS=(
+    --partition "$PARTITION"
+    --time "$TIME"
+    --cpus "$CPUS"
+    --mem "$MEM"
+    --wd "$WDIR"
+    --env-name "$ANNOT_GLOBAL_CDS_ENV"
+    --input-fna "$ANNOT_GLOBAL_CDS_INPUT_FNA"
+    --outdir "$ANNOT_GLOBAL_CDS_OUTDIR"
+  )
+
+  [[ -n "${ANNOT_GLOBAL_CDS_SWISSPROT_DB}" ]] && AN_ARGS+=(--swissprot-db "$ANNOT_GLOBAL_CDS_SWISSPROT_DB")
+  [[ -n "${ANNOT_GLOBAL_CDS_PFAM_DB}" ]] && AN_ARGS+=(--pfam-db "$ANNOT_GLOBAL_CDS_PFAM_DB")
+  [[ -n "${ANNOT_GLOBAL_CDS_EGGNOG_DATA_DIR}" ]] && AN_ARGS+=(--eggnog-data-dir "$ANNOT_GLOBAL_CDS_EGGNOG_DATA_DIR")
+
+  if [[ "${ANNOT_GLOBAL_CDS_STEP_INIT}" -eq 1 ]]; then
+    AN_ARGS+=(--init-only)
+  fi
+  if [[ "${ANNOT_GLOBAL_CDS_STEP_ORTHOLOGY}" -eq 1 ]]; then
+    AN_ARGS+=(--orthology-only)
+  fi
+  if [[ "${ANNOT_GLOBAL_CDS_STEP_DOMAINS}" -eq 1 ]]; then
+    AN_ARGS+=(--domains-only)
+  fi
+  if [[ "${ANNOT_GLOBAL_CDS_STEP_FUNCTIONAL}" -eq 1 ]]; then
+    AN_ARGS+=(--functional-only)
+  fi
+  if [[ "${ANNOT_GLOBAL_CDS_STEP_TAXONOMY}" -eq 1 ]]; then
+    AN_ARGS+=(--taxonomy-only)
+  fi
+
+  bash workflow/run_annotate_global_cds.sh "${AN_ARGS[@]}" >>"$OUT_LOG" 2>>"$ERR_LOG"
 fi
 
 echo ">>> Pipeline finished."
