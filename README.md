@@ -38,7 +38,19 @@ Oxford Nanopore shotgun metagenomic data, providing a modular framework for:
   5) smORF refinement based on genomic context
    • bacterial refinement (Prodigal context)
    • fungal/euk refinement (MetaEuk context)
-  6) Downstream assembly metrics + visualization
+  6) GLOBAL representative CDS catalog construction
+    • MMseqs2-derived nonredundant representative CDS reference
+    • Consistent abundance units across libraries and environments
+  7) Read mapping to GLOBAL CDS reference + compositional DA
+     • Per-library minimap2 mapping
+     • ALDEx2 differential abundance analysis
+  8) Global CDS functional annotation
+     • orthology-style best hits (DIAMOND)
+     • conserved domain annotation (HMMER/Pfam)
+     • enzyme / GO / KEGG / COG-like summaries (eggNOG-mapper)
+     • taxonomic hints for characterized proteins
+     • unified annotation table updated stepwise
+  9) Downstream assembly metrics + visualization
 
 All major stages are explicitly decoupled:
   - QC once → reuse
@@ -46,8 +58,11 @@ All major stages are explicitly decoupled:
   - smORFs independently
   - AMP prediction independently
   - Refinement independently
+  - GLOBAL CDS abundance mapping independently
+  - Differential abundance independently
+  - Global CDS annotation independently
   - Downstream analysis independently
-
+  
 The pipeline integrates compositional differential abundance analysis
 (ALDEx2) to identify environment-associated smORFs while accounting for
 metagenomic count structure and library size variability.
@@ -92,39 +107,32 @@ cluster_map.tsv
    ▼
 GLOBAL representative CDS catalog
    │
-   ▼
-cds_nr_global_rep.fna
+   ├── Read mapping per library (minimap2)
+   │      │
+   │      ▼
+   │   Primary alignments (MAPQ ≥ 20)
+   │      │
+   │      ▼
+   │   Per-CDS abundance tables
+   │      │
+   │      ▼
+   │   Compositional normalization (CLR)
+   │      │
+   │      ▼
+   │   Differential abundance analysis (ALDEx2)
+   │      │
+   │      ▼
+   │   Environment-associated smORFs
    │
-   ▼
-Read mapping per library (minimap2)
-   │
-   ▼
-Primary alignments (MAPQ ≥ 20)
-   │
-   ▼
-Per-CDS abundance tables
-   │
-   ▼
-Compositional normalization (CLR)
-   │
-   ▼
-Differential abundance analysis (ALDEx2)
-   │
-   ▼
-Environment-associated smORFs
-   │
-   ├─ Bacterial genomic-context refinement
-   │
-   └─ Fungal genomic-context refinement
-        │
-        ▼
-Refined smORF catalog
-   │
-   ▼
-Macrel AMP prediction
-   │
-   ▼
-predicted_smorfs.with_macrel.tsv
+   └── Global CDS functional annotation
+          │
+          ├─ DIAMOND best-hit search
+          ├─ HMMER / Pfam domain annotation
+          ├─ eggNOG functional annotation
+          ├─ taxonomy hint integration
+          │
+          ▼
+       global_rep_cds_annotation.tsv
 </pre>
 ---
 
@@ -153,6 +161,9 @@ STRUCTURE
    map_global_cds_array_task.sh             - Per-library mapping task (minimap2)
    aldex2_global_da.R                     - ALDEx2 differential abundance workflow
    run_differential_abundance_aldex2.sh   - Slurm runner for compositional DA
+   run_annotate_global_cds.sh              - Runner for global CDS annotation workflow
+   annot_global_cds_job.sh                 - Per-step Slurm job wrapper for CDS annotation
+   update_global_annotation_table.py       - Initialize/update unified annotation TSV
 
  /envs/                                    - Conda environments (auto-created)
  /logs/                                    - Timestamped Slurm logs
@@ -169,7 +180,7 @@ STRUCTURE
      GLOBAL/
        catalog/
          peptides_all_global.faa
-         cds_nr_global_rep.fna
+         global_rep_cds.fna
          cds_nr_global_rep.metadata.tsv
        mmseqs/
          cluster_map.tsv
@@ -183,6 +194,15 @@ STRUCTURE
             aldex2_metadata.tsv
             aldex2_results_kw.tsv
             mapping_summary_plot.pdf
+   annotation/
+      global_cds/
+         global_rep_cds_annotation.tsv
+         01_init/
+         02_orthology/
+         03_domains/
+         04_functional/
+         05_taxonomy/
+         logs/
  README.md
  LICENSE
  CITATION.cff
@@ -212,6 +232,11 @@ DESIGN PRINCIPLES
  - Compositional-aware differential abundance using CLR transformation
  - Monte Carlo Dirichlet sampling to model count uncertainty
  - Environment-level statistical comparison across ecosystems
+ - Unified stepwise annotation of GLOBAL representative CDSs
+ - Same master annotation table updated across orthology/domain/function/taxonomy stages
+ - Missing annotations preserved explicitly as NA
+ - Annotation confidence summarized from accumulated evidence
+ - Orthology-style best hits separated from domain- and ontology-level evidence
 </pre>
 
 ---
@@ -438,7 +463,7 @@ Workflow logic:
 
   5) Build global nonredundant CDS FASTA:
 
-       results/smorfs/GLOBAL/catalog/cds_nr_global_rep.fna
+       results/smorfs/GLOBAL/catalog/global_rep_cds.fna
 
   6) Build accompanying metadata table:
 
@@ -468,7 +493,7 @@ ensuring:
   • reduced redundancy
   • compatibility with read-mapping tools
   • reproducible feature identifiers
-  • compatibility with DESeq2 count matrices
+  • compatibility with ALDeX2 count matrices
 
 
 This step does NOT perform read mapping yet.
@@ -566,7 +591,7 @@ defined by MMseqs2.
 
 These abundance estimates support:
 
-  • differential abundance analysis (DESeq2)
+  • differential abundance analysis (ALDEx2)
   • ecological distribution analysis
   • recurrence validation
   • prioritization of conserved AMP candidates
@@ -730,8 +755,72 @@ Macrel fields added:
   hemo_prob       probability of hemolysis
   macrel_class    structural AMP class (if detected)
 </pre>
-
 ---
+
+<pre>
+GLOBAL CDS FUNCTIONAL ANNOTATION
+--------------------------------
+
+The pipeline supports modular functional annotation of the GLOBAL
+representative CDS catalog used for abundance quantification.
+
+Input reference:
+
+  results/abundance/global_cds/reference/global_rep_cds.fna
+
+This stage creates a unified annotation table that is updated
+incrementally after each step:
+
+  results/annotation/global_cds/global_rep_cds_annotation.tsv
+
+Target columns:
+
+  representative_id
+  protein_length
+  best_ortholog_or_best_hit_description
+  conserved_domains
+  enzyme_related_annotation
+  go_terms
+  kegg_ortholog_pathway_hint
+  cog_functional_category
+  taxonomic_hint
+  annotation_confidence_tier
+  hypothetical_or_unknown
+
+Supported steps:
+
+Step 0 — Initialization
+  • translate CDS to protein FASTA
+  • initialize master annotation table
+  • fill missing fields as NA
+
+Step 1 — Orthology-style best-hit annotation
+  • DIAMOND blastp against a protein reference DB
+  • intended for interpretable best-hit descriptions
+  • recommended DB: UniProt Swiss-Prot
+
+Step 2 — Conserved domain annotation
+  • HMMER hmmscan against Pfam-A
+  • populates conserved_domains
+
+Step 3 — Functional summaries
+  • eggNOG-mapper
+  • populates:
+      enzyme_related_annotation
+      go_terms
+      kegg_ortholog_pathway_hint
+      cog_functional_category
+
+Step 4 — Taxonomic hint integration
+  • prioritizes species/taxonomic names from DIAMOND hits
+  • falls back to eggNOG taxonomic scope when available
+
+The same output TSV is updated after each step.
+Missing information remains encoded as NA.
+
+This annotation workflow is independent from abundance mapping and can be
+run on demand after the GLOBAL representative CDS reference is available.
+</pre>
 
 <pre>
 STEP CONTROL
@@ -862,6 +951,21 @@ Optional parameters:
 --aldex2-min-samples INT
    minimum number of libraries passing filter
    default: 2
+
+Global CDS annotation:
+  --annot-global-cds-create-env
+  --annot-global-cds-all
+  --annot-global-cds-init-only
+  --annot-global-cds-orthology-only
+  --annot-global-cds-domains-only
+  --annot-global-cds-functional-only
+  --annot-global-cds-taxonomy-only
+  --annot-global-cds-env STR
+  --annot-global-cds-input-fna PATH
+  --annot-global-cds-outdir PATH
+  --annot-global-cds-swissprot-db PATH
+  --annot-global-cds-pfam-db PATH
+  --annot-global-cds-eggnog-data PATH
 </pre>
 
 ---
@@ -1024,13 +1128,11 @@ bash workflow/runall.sh \
 GLOBAL NR CDS REFERENCE
 -----------------------
 
-# 18) Build GLOBAL representative CDS catalog from MMseq clusters
+# 18) Build GLOBAL representative CDS reference only
 bash workflow/runall.sh \
-  --build-global-rep-cds
+  --map-global-cds-build-ref-only
 
 # 19) Run full differential abundance workflow
-#     (prepare count matrix + run ALDEx2)
-
 bash workflow/runall.sh \
   --aldex2-da-only
 
@@ -1083,6 +1185,40 @@ bash workflow/runall.sh \
 bash workflow/runall.sh \
   --aldex2-da-only \
   --aldex2-outdir results/custom_aldex2
+
+# 28) Create annotation environment only
+bash workflow/runall.sh \
+  --annot-global-cds-create-env
+
+# 29) Initialize protein FASTA + master annotation table
+bash workflow/runall.sh \
+  --annot-global-cds-init-only
+
+# 30) Run orthology-style best-hit annotation
+bash workflow/runall.sh \
+  --annot-global-cds-orthology-only \
+  --annot-global-cds-swissprot-db /path/to/swissprot.dmnd
+
+# 31) Run conserved domain annotation
+bash workflow/runall.sh \
+  --annot-global-cds-domains-only \
+  --annot-global-cds-pfam-db /path/to/Pfam-A.hmm
+
+# 32) Run eggNOG functional annotation
+bash workflow/runall.sh \
+  --annot-global-cds-functional-only \
+  --annot-global-cds-eggnog-data /path/to/eggnog_data
+
+# 33) Run taxonomy hint integration
+bash workflow/runall.sh \
+  --annot-global-cds-taxonomy-only
+
+# 34) Run complete global CDS annotation workflow
+bash workflow/runall.sh \
+  --annot-global-cds-all \
+  --annot-global-cds-swissprot-db /path/to/swissprot.dmnd \
+  --annot-global-cds-pfam-db /path/to/Pfam-A.hmm \
+  --annot-global-cds-eggnog-data /path/to/eggnog_data
 </pre>
 
 <pre>
