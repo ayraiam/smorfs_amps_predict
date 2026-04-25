@@ -151,7 +151,7 @@ def cmd_merge_orthology(args):
     if not Path(args.diamond_tsv).exists():
         raise FileNotFoundError(args.diamond_tsv)
 
-    cols = ["qseqid", "sseqid", "stitle", "pident", "aln_len", "evalue", "bitscore", "sscinames"]
+    cols = ["qseqid", "sseqid", "stitle", "pident", "aln_len", "evalue", "bitscore"]
     hits = pd.read_csv(args.diamond_tsv, sep="\t", names=cols, dtype=str, keep_default_na=False)
     if hits.empty:
         df = recompute_flags(df)
@@ -311,11 +311,19 @@ def cmd_merge_taxonomy(args):
     tax_map = {}
 
     if args.diamond_tsv and Path(args.diamond_tsv).exists():
-        cols = ["qseqid", "sseqid", "stitle", "pident", "aln_len", "evalue", "bitscore", "sscinames"]
+        cols = ["qseqid", "sseqid", "stitle", "pident", "aln_len", "evalue", "bitscore"]
         hits = pd.read_csv(args.diamond_tsv, sep="\t", names=cols, dtype=str, keep_default_na=False)
+
         for _, row in hits.iterrows():
             qid = row["qseqid"]
-            sp = normalize_na(row["sscinames"])
+            title = normalize_na(row["stitle"])
+
+            # Try to extract organism from UniProt-style title, e.g. OS=Escherichia coli OX=...
+            sp = "NA"
+            m = re.search(r"OS=([^=]+?)(?:\sOX=|\sGN=|\sPE=|\sSV=|$)", title)
+            if m:
+                sp = m.group(1).strip()
+
             if not is_missing(sp):
                 tax_map[qid] = sp
 
