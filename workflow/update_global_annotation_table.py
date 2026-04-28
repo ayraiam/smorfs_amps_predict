@@ -35,6 +35,22 @@ NA_COLS = [
     "hypothetical_or_unknown",
 ]
 
+# -----------------------------
+# Annotation cutoffs
+# -----------------------------
+
+DIAMOND_MAX_EVALUE = 1e-5
+DIAMOND_MIN_BITSCORE = 50.0
+DIAMOND_MIN_PIDENT = 35.0
+DIAMOND_MIN_QUERY_COV = 0.60
+
+PFAM_MAX_IEVALUE = 1e-3
+PFAM_MIN_DOMAIN_SCORE = 25.0
+PFAM_MIN_DOMAIN_COV = 0.35
+
+EGGNOG_MAX_EVALUE = 1e-3
+EGGNOG_MIN_SCORE = 50.0
+
 
 def read_table(path: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
@@ -65,6 +81,50 @@ def normalize_na(x):
     s = str(x).strip()
     return "NA" if s == "" else s
 
+def safe_float(x, default=None):
+    try:
+        s = str(x).strip()
+        if s in ("", "NA", "-", "nan", "None"):
+            return default
+        return float(s)
+    except Exception:
+        return default
+
+
+def passes_diamond_filters(row) -> bool:
+    evalue = safe_float(row.get("evalue"))
+    bitscore = safe_float(row.get("bitscore"))
+    pident = safe_float(row.get("pident"))
+    aln_len = safe_float(row.get("aln_len"))
+    qlen = safe_float(row.get("qlen"))
+
+    if None in (evalue, bitscore, pident, aln_len, qlen):
+        return False
+
+    if qlen <= 0:
+        return False
+
+    query_cov = aln_len / qlen
+
+    return (
+        evalue <= DIAMOND_MAX_EVALUE
+        and bitscore >= DIAMOND_MIN_BITSCORE
+        and pident >= DIAMOND_MIN_PIDENT
+        and query_cov >= DIAMOND_MIN_QUERY_COV
+    )
+
+
+def passes_eggnog_filters(row) -> bool:
+    evalue = safe_float(row.get("evalue"))
+    score = safe_float(row.get("score"))
+
+    if evalue is None or score is None:
+        return False
+
+    return (
+        evalue <= EGGNOG_MAX_EVALUE
+        and score >= EGGNOG_MIN_SCORE
+    )
 
 def translate_record(seq: str) -> str:
     seq = re.sub(r"\s+", "", seq.upper())
@@ -151,27 +211,50 @@ def cmd_merge_orthology(args):
     if not Path(args.diamond_tsv).exists():
         raise FileNotFoundError(args.diamond_tsv)
 
-    cols = ["qseqid", "sseqid", "stitle", "pident", "aln_len", "evalue", "bitscore"]
+    cols = [
+        "qseqid", "sseqid", "stitle", "pident", "aln_len",
+        "qlen", "slen", "qstart", "qend", "sstart", "send",
+        "evalue", "bitscore"
+    ]
+
     hits = pd.read_csv(args.diamond_tsv, sep="\t", names=cols, dtype=str, keep_default_na=False)
+
     if hits.empty:
         df = recompute_flags(df)
         write_table(df, args.table_tsv)
         return
+
+    hits = hits[hits.apply(passes_diamond_filters, axis=1)].copy()
+
+    if hits.empty:
+        df = recompute_flags(df)
+        write_table(df, args.table_tsv)
+        return
+
+    hits["query_cov"] = hits.apply(
+        lambda r: safe_float(r["aln_len"], 0.0) / safe_float(r["qlen"], 1.0),
+        axis=1,
+    )
 
     hits["best_hit"] = hits.apply(
         lambda r: " | ".join([
             normalize_na(r["sseqid"]),
             normalize_na(r["stitle"]),
             f"pident={normalize_na(r['pident'])}",
+            f"query_cov={r['query_cov']:.3f}",
             f"evalue={normalize_na(r['evalue'])}",
             f"bitscore={normalize_na(r['bitscore'])}",
         ]),
         axis=1,
     )
+
     hit_map = dict(zip(hits["qseqid"], hits["best_hit"]))
 
     df["best_ortholog_or_best_hit_description"] = df.apply(
-        lambda r: hit_map.get(r["representative_id"], r["best_ortholog_or_best_hit_description"]),
+        lambda r: hit_map.get(
+            r["representative_id"],
+            r["best_ortholog_or_best_hit_description"]
+        ),
         axis=1,
     )
 
@@ -181,22 +264,58 @@ def cmd_merge_orthology(args):
 
 def parse_domtblout(path: str):
     parsed = {}
+
     with open(path) as fh:
         for line in fh:
             if line.startswith("#"):
                 continue
+
             parts = line.rstrip("\n").split()
             if len(parts) < 23:
                 continue
+
             domain_name = parts[0]
             domain_acc = parts[1]
+            hmm_len = safe_float(parts[2])
             query_id = parts[3]
-            full_evalue = parts[6]
-            dom_score = parts[13]
-            label = f"{domain_name}({domain_acc};e={full_evalue};score={dom_score})"
+
+            full_evalue = safe_float(parts[6])
+            full_score = safe_float(parts[7])
+
+            domain_i_eval = safe_float(parts[12])
+            domain_score = safe_float(parts[13])
+
+            hmm_from = safe_float(parts[15])
+            hmm_to = safe_float(parts[16])
+
+            if None in (hmm_len, domain_i_eval, domain_score, hmm_from, hmm_to):
+                continue
+
+            if hmm_len <= 0:
+                continue
+
+            domain_cov = (hmm_to - hmm_from + 1) / hmm_len
+
+            if not (
+                domain_i_eval <= PFAM_MAX_IEVALUE
+                and domain_score >= PFAM_MIN_DOMAIN_SCORE
+                and domain_cov >= PFAM_MIN_DOMAIN_COV
+            ):
+                continue
+
+            label = (
+                f"{domain_name}"
+                f"({domain_acc};"
+                f"i-evalue={domain_i_eval:.2e};"
+                f"score={domain_score:.1f};"
+                f"domain_cov={domain_cov:.3f})"
+            )
+
             parsed.setdefault(query_id, [])
+
             if label not in parsed[query_id]:
                 parsed[query_id].append(label)
+
     return {k: "; ".join(v[:5]) for k, v in parsed.items()}
 
 
@@ -243,6 +362,14 @@ def cmd_merge_functional(args):
         raise FileNotFoundError(args.eggnog_annotations)
 
     ann = load_eggnog(args.eggnog_annotations)
+
+    if ann.empty:
+        df = recompute_flags(df)
+        write_table(df, args.table_tsv)
+        return
+
+    ann = ann[ann.apply(passes_eggnog_filters, axis=1)].copy()
+
     if ann.empty:
         df = recompute_flags(df)
         write_table(df, args.table_tsv)
