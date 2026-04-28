@@ -36,8 +36,9 @@ case "${STEP}" in
       --query "${PROTEINS_FAA}" \
       --db "${SWISSPROT_DB}" \
       --out "${ORTHO_TSV}" \
-      --outfmt 6 qseqid sseqid stitle pident length evalue bitscore \
+      --outfmt 6 qseqid sseqid stitle pident length qlen slen qstart qend sstart send evalue bitscore \
       --max-target-seqs 1 \
+      --evalue 1e-5 \
       --threads "${THREADS}" \
       --sensitive
 
