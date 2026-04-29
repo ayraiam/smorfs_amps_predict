@@ -296,19 +296,33 @@ def parse_domtblout(path: str):
 
             domain_cov = (hmm_to - hmm_from + 1) / hmm_len
 
-            if not (
+            passes_standard_domain_rule = (
                 domain_i_eval <= PFAM_MAX_IEVALUE
                 and domain_score >= PFAM_MIN_DOMAIN_SCORE
                 and domain_cov >= PFAM_MIN_DOMAIN_COV
-            ):
+            )
+
+            passes_strong_partial_rule = (
+                domain_i_eval <= 1e-10
+                and domain_score >= 40.0
+            )
+
+            if not (passes_standard_domain_rule or passes_strong_partial_rule):
                 continue
+
+            domain_match_type = (
+                "standard"
+                if passes_standard_domain_rule
+                else "strong_partial"
+            )
 
             label = (
                 f"{domain_name}"
                 f"({domain_acc};"
                 f"i-evalue={domain_i_eval:.2e};"
                 f"score={domain_score:.1f};"
-                f"domain_cov={domain_cov:.3f})"
+                f"domain_cov={domain_cov:.3f};"
+                f"match_type={domain_match_type})"
             )
 
             parsed.setdefault(query_id, [])
