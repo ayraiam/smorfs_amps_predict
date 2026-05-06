@@ -153,6 +153,19 @@ ALDEX2_MIN_SAMPLES="5"
 ALDEX2_GROUP_COL="environment"
 ALDEX2_USE_MC="FALSE"
 
+# Optional global cross-layer annotation network
+RUN_GLOBAL_ANNOT_NETWORK=0
+GLOBAL_ANNOT_NETWORK_CREATE_ENV=0
+GLOBAL_ANNOT_NETWORK_ENV="global_annot_network_env"
+GLOBAL_ANNOT_NETWORK_ANNOTATION_FILE="${RESULTS_DIR}/annotation/global_cds/global_rep_cds_annotation.tsv"
+GLOBAL_ANNOT_NETWORK_COUNT_MATRIX="${RESULTS_DIR}/differential_abundance/aldex2/aldex2_counts_matrix.tsv"
+GLOBAL_ANNOT_NETWORK_METADATA_FILE="${RESULTS_DIR}/differential_abundance/aldex2/aldex2_metadata_used.tsv"
+GLOBAL_ANNOT_NETWORK_OUTDIR="${RESULTS_DIR}/annotation_network/global_cross_layer_network"
+GLOBAL_ANNOT_NETWORK_MIN_EDGE_SUPPORT="2"
+GLOBAL_ANNOT_NETWORK_MIN_EDGE_SUM_CPM="0"
+GLOBAL_ANNOT_NETWORK_TOP_EDGE_PERCENTILE="0"
+GLOBAL_ANNOT_NETWORK_STEP="all"
+
 usage() {
   echo "Usage: bash workflow/runall.sh [options]"
   echo
@@ -168,7 +181,7 @@ usage() {
   echo "  --metaflye-only       Run only MetaFlye array (skip QC)"
   echo "  --qc-and-metaflye     Run QC then MetaFlye array"
   echo "  --smorfs-only         Run only smORF discovery on existing MetaFlye assemblies"
-  echo "--refine-bacs-only     Run only bacterial refinement (post Macrel/smORFs)"
+  echo "  --refine-bacs-only     Run only bacterial refinement (post Macrel/smORFs)"
   echo
   echo "Mode:"
   echo "  --run-filtering       Enable trimming/filtering step (default: OFF; QC-only)"
@@ -277,6 +290,19 @@ usage() {
   echo "  --annot-global-cds-swissprot-db P   DIAMOND DB for best-hit search"
   echo "  --annot-global-cds-pfam-db P        Pfam-A.hmm path (hmmpress'ed)"
   echo "  --annot-global-cds-eggnog-data P    eggNOG-mapper data dir"
+
+  echo "Global annotation network:"
+  echo "  --global-annot-network-only       Build global Pfam/KO/COG/GO/EC cross-layer network"
+  echo "  --global-annot-network-create-env Create network conda env and exit"
+  echo "  --global-annot-network-env STR    Env name (default: global_annot_network_env)"
+  echo "  --global-annot-network-annotation-file PATH"
+  echo "  --global-annot-network-count-matrix PATH"
+  echo "  --global-annot-network-metadata-file PATH"
+  echo "  --global-annot-network-outdir PATH"
+  echo "  --global-annot-network-min-edge-support INT"
+  echo "  --global-annot-network-min-edge-sum-cpm FLOAT"
+  echo "  --global-annot-network-top-edge-percentile FLOAT"
+  echo "  --global-annot-network-step STR   Step to run: all, 1-10, cds-universe, clean-annotations, abundance, merge, raw-edges, collapse-edges, nodes, filter, communities, export"
   echo
   exit 0
 }
@@ -729,6 +755,42 @@ while [[ $# -gt 0 ]]; do
       --annot-global-cds-swissprot-db) ANNOT_GLOBAL_CDS_SWISSPROT_DB="$2"; shift 2 ;;
       --annot-global-cds-pfam-db) ANNOT_GLOBAL_CDS_PFAM_DB="$2"; shift 2 ;;
       --annot-global-cds-eggnog-data) ANNOT_GLOBAL_CDS_EGGNOG_DATA_DIR="$2"; shift 2 ;;
+
+      --global-annot-network-create-env)
+        GLOBAL_ANNOT_NETWORK_CREATE_ENV=1
+        shift 1
+        ;;
+
+      --global-annot-network-step)
+        GLOBAL_ANNOT_NETWORK_STEP="$2"
+        shift 2
+        ;;
+
+      --global-annot-network-only)
+        RUN_QC=0
+        RUN_ASSEMBLY=0
+        RUN_METAFlyE=0
+        RUN_SMORFS=0
+        RUN_DOWNSTREAM=0
+        RUN_REFINE_BACS=0
+        RUN_REFINE_EUKS=0
+        RUN_METAEUK=0
+        RUN_MMSEQS_GLOBAL=0
+        RUN_MAP_GLOBAL_CDS=0
+        RUN_ALDEX2_DA=0
+        RUN_ANNOT_GLOBAL_CDS=0
+        RUN_GLOBAL_ANNOT_NETWORK=1
+        shift 1
+        ;;
+
+      --global-annot-network-env) GLOBAL_ANNOT_NETWORK_ENV="$2"; shift 2 ;;
+      --global-annot-network-annotation-file) GLOBAL_ANNOT_NETWORK_ANNOTATION_FILE="$2"; shift 2 ;;
+      --global-annot-network-count-matrix) GLOBAL_ANNOT_NETWORK_COUNT_MATRIX="$2"; shift 2 ;;
+      --global-annot-network-metadata-file) GLOBAL_ANNOT_NETWORK_METADATA_FILE="$2"; shift 2 ;;
+      --global-annot-network-outdir) GLOBAL_ANNOT_NETWORK_OUTDIR="$2"; shift 2 ;;
+      --global-annot-network-min-edge-support) GLOBAL_ANNOT_NETWORK_MIN_EDGE_SUPPORT="$2"; shift 2 ;;
+      --global-annot-network-min-edge-sum-cpm) GLOBAL_ANNOT_NETWORK_MIN_EDGE_SUM_CPM="$2"; shift 2 ;;
+      --global-annot-network-top-edge-percentile) GLOBAL_ANNOT_NETWORK_TOP_EDGE_PERCENTILE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1"; usage ;;
   esac
 done
@@ -835,6 +897,17 @@ if [[ "${ANNOT_GLOBAL_CDS_CREATE_ENV}" -eq 1 ]]; then
     --env-name "${ANNOT_GLOBAL_CDS_ENV}" \
     >>"$OUT_LOG" 2>>"$ERR_LOG"
   echo ">>> Global CDS annotation env complete. Exiting as requested." | tee -a "$OUT_LOG" "$CMD_LOG"
+  exit 0
+fi
+
+if [[ "${GLOBAL_ANNOT_NETWORK_CREATE_ENV}" -eq 1 ]]; then
+  echo ">>> Creating global annotation network env" | tee -a "$OUT_LOG" "$CMD_LOG"
+  /bin/bash workflow/run_global_annotation_network.sh \
+    --create-env \
+    --env-name "${GLOBAL_ANNOT_NETWORK_ENV}" \
+    --step "${GLOBAL_ANNOT_NETWORK_STEP}" \
+    >>"$OUT_LOG" 2>>"$ERR_LOG"
+  echo ">>> Global annotation network env complete. Exiting as requested." | tee -a "$OUT_LOG" "$CMD_LOG"
   exit 0
 fi
 
@@ -1281,6 +1354,28 @@ if [[ "${RUN_ANNOT_GLOBAL_CDS}" -eq 1 ]]; then
   fi
 
   bash workflow/run_annotate_global_cds.sh "${AN_ARGS[@]}" >>"$OUT_LOG" 2>>"$ERR_LOG"
+fi
+
+if [[ "${RUN_GLOBAL_ANNOT_NETWORK}" -eq 1 ]]; then
+  echo ">>> Running global cross-layer annotation network workflow ..." | tee -a "$OUT_LOG" "$CMD_LOG"
+
+  bash workflow/run_global_annotation_network.sh \
+    --results-dir "${RESULTS_DIR}" \
+    --partition "${PARTITION}" \
+    --time "${TIME}" \
+    --cpus "${CPUS}" \
+    --mem "${MEM}" \
+    --wd "${WDIR}" \
+    --env-name "${GLOBAL_ANNOT_NETWORK_ENV}" \
+    --step "${GLOBAL_ANNOT_NETWORK_STEP}" \
+    --annotation-file "${GLOBAL_ANNOT_NETWORK_ANNOTATION_FILE}" \
+    --count-matrix "${GLOBAL_ANNOT_NETWORK_COUNT_MATRIX}" \
+    --metadata-file "${GLOBAL_ANNOT_NETWORK_METADATA_FILE}" \
+    --outdir "${GLOBAL_ANNOT_NETWORK_OUTDIR}" \
+    --min-edge-support "${GLOBAL_ANNOT_NETWORK_MIN_EDGE_SUPPORT}" \
+    --min-edge-sum-cpm "${GLOBAL_ANNOT_NETWORK_MIN_EDGE_SUM_CPM}" \
+    --top-edge-percentile "${GLOBAL_ANNOT_NETWORK_TOP_EDGE_PERCENTILE}" \
+    >>"$OUT_LOG" 2>>"$ERR_LOG"
 fi
 
 echo ">>> Pipeline finished."
