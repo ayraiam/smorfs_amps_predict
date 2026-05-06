@@ -50,8 +50,16 @@ Oxford Nanopore shotgun metagenomic data, providing a modular framework for:
      • enzyme / GO / KEGG / COG-like summaries (eggNOG-mapper)
      • taxonomic hints for characterized proteins
      • unified annotation table updated stepwise
-  9) Downstream assembly metrics + visualization
+  9) Global cross-layer annotation network
+     • Integrates Pfam, KO, GO, COG, and EC annotations
+     • Builds CDS-supported functional co-annotation edges
+     • Generates global node/edge tables
+     • Supports abundance-weighted network construction
+     • Runs module/community detection
+     • Exports GraphML/GEXF for Cytoscape or Gephi
 
+  10) Downstream assembly metrics + visualization
+  
 All major stages are explicitly decoupled:
   - QC once → reuse
   - Assembly without repeating QC
@@ -61,7 +69,7 @@ All major stages are explicitly decoupled:
   - GLOBAL CDS abundance mapping independently
   - Differential abundance independently
   - Global CDS annotation independently
-  - Downstream analysis independently
+  - Global annotation network independently
   
 The pipeline integrates compositional differential abundance analysis
 (ALDEx2) to identify environment-associated smORFs while accounting for
@@ -133,6 +141,17 @@ GLOBAL representative CDS catalog
           │
           ▼
        global_rep_cds_annotation.tsv
+          │
+          ▼
+       Cross-layer annotation network
+          │
+          ├─ Pfam ↔ KO ↔ GO ↔ COG ↔ EC links
+          ├─ CDS-supported annotation co-occurrence
+          ├─ abundance-weighted global edges
+          ├─ Louvain / modularity-based communities
+          │
+          ▼
+       global_network.graphml / global_network.gexf
 </pre>
 ---
 
@@ -164,6 +183,8 @@ STRUCTURE
    run_annotate_global_cds.sh              - Runner for global CDS annotation workflow
    annot_global_cds_job.sh                 - Per-step Slurm job wrapper for CDS annotation
    update_global_annotation_table.py       - Initialize/update unified annotation TSV
+   run_global_annotation_network.sh        - Runner for cross-layer annotation network
+   build_global_cross_layer_network.py     - Stepwise Pfam/KO/GO/COG/EC network builder
 
  /envs/                                    - Conda environments (auto-created)
  /logs/                                    - Timestamped Slurm logs
@@ -203,6 +224,21 @@ STRUCTURE
          04_functional/
          05_taxonomy/
          logs/
+    annotation_network/
+      global_cross_layer_network/
+         01_cds_universe.tsv
+         02_clean_annotation_long.tsv
+         03_cds_abundance_summary.tsv
+         04_annotation_long_with_abundance.tsv
+         05_raw_edges_by_cds.tsv
+         06_global_network_edges.tsv
+         07_global_network_nodes.tsv
+         08_global_network_edges_filtered.tsv
+         08_global_network_nodes_filtered.tsv
+         09_global_network_modules.tsv
+         10_global_network_module_summary.tsv
+         global_network.graphml
+         global_network.gexf
  README.md
  LICENSE
  CITATION.cff
@@ -237,6 +273,11 @@ DESIGN PRINCIPLES
  - Missing annotations preserved explicitly as NA
  - Annotation confidence summarized from accumulated evidence
  - Orthology-style best hits separated from domain- and ontology-level evidence
+ - Cross-layer functional network construction from unified CDS annotations
+ - Network edges represent annotation co-occurrence within the same representative CDS
+ - Edge weights summarize CDS support and global abundance
+ - Stepwise network execution supports re-entry and debugging
+ - GraphML/GEXF exports support Cytoscape and Gephi visualization
 </pre>
 
 ---
@@ -823,6 +864,59 @@ run on demand after the GLOBAL representative CDS reference is available.
 </pre>
 
 <pre>
+GLOBAL CROSS-LAYER ANNOTATION NETWORK
+-------------------------------------
+
+The pipeline can build a global functional annotation network from the
+unified GLOBAL representative CDS annotation table.
+
+Input files:
+
+  results/annotation/global_cds/global_rep_cds_annotation.tsv
+  results/differential_abundance/aldex2/aldex2_counts_matrix.tsv
+  results/differential_abundance/aldex2/aldex2_metadata_used.tsv
+
+Network logic:
+
+  • nodes are annotation terms:
+      Pfam domains
+      KEGG orthologs
+      GO terms
+      COG categories
+      EC enzyme identifiers
+
+  • edges connect annotations that co-occur on the same representative CDS
+
+  • edge weights summarize:
+      number of CDS supporting the edge
+      summed global CPM
+      median global CPM
+      mean global prevalence
+
+This network is intended to integrate domain-, enzyme-, pathway-,
+ontology-, and category-level functional evidence into a single
+global representation.
+
+Stepwise outputs:
+
+  01_cds_universe.tsv
+  02_clean_annotation_long.tsv
+  03_cds_abundance_summary.tsv
+  04_annotation_long_with_abundance.tsv
+  05_raw_edges_by_cds.tsv
+  06_global_network_edges.tsv
+  07_global_network_nodes.tsv
+  08_global_network_edges_filtered.tsv
+  08_global_network_nodes_filtered.tsv
+  09_global_network_modules.tsv
+  10_global_network_module_summary.tsv
+  global_network.graphml
+  global_network.gexf
+
+The GraphML and GEXF files can be imported into Cytoscape or Gephi.
+</pre>
+
+<pre>
 STEP CONTROL
 ------------
 
@@ -966,6 +1060,19 @@ Global CDS annotation:
   --annot-global-cds-swissprot-db PATH
   --annot-global-cds-pfam-db PATH
   --annot-global-cds-eggnog-data PATH
+
+Global annotation network:
+  --global-annot-network-create-env
+  --global-annot-network-only
+  --global-annot-network-step STR
+  --global-annot-network-env STR
+  --global-annot-network-annotation-file PATH
+  --global-annot-network-count-matrix PATH
+  --global-annot-network-metadata-file PATH
+  --global-annot-network-outdir PATH
+  --global-annot-network-min-edge-support INT
+  --global-annot-network-min-edge-sum-cpm FLOAT
+  --global-annot-network-top-edge-percentile FLOAT
 </pre>
 
 ---
@@ -1219,6 +1326,70 @@ bash workflow/runall.sh \
   --annot-global-cds-swissprot-db /path/to/swissprot.dmnd \
   --annot-global-cds-pfam-db /path/to/Pfam-A.hmm \
   --annot-global-cds-eggnog-data /path/to/eggnog_data
+
+GLOBAL CROSS-LAYER ANNOTATION NETWORK
+-------------------------------------
+
+# 35) Create network environment only
+bash workflow/runall.sh \
+  --global-annot-network-create-env
+
+# 36) Run complete global annotation network workflow
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step all
+
+# 37) Run only Step 1: define CDS universe
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 1
+
+# 38) Run only Step 2: clean annotation columns
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 2
+
+# 39) Run only Step 3: summarize CDS abundance
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 3
+
+# 40) Run only Step 4: merge annotation and abundance
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 4
+
+# 41) Run only Step 5: create raw CDS-supported edges
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 5
+
+# 42) Run only Step 6: collapse repeated edges
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 6
+
+# 43) Run only Step 7: create node table
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 7
+
+# 44) Run only Step 8: filter network
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 8 \
+  --global-annot-network-min-edge-support 3 \
+  --global-annot-network-top-edge-percentile 75
+
+# 45) Run only Step 9: community detection
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 9
+
+# 46) Run only Step 10: export GraphML/GEXF
+bash workflow/runall.sh \
+  --global-annot-network-only \
+  --global-annot-network-step 10
 </pre>
 
 <pre>
@@ -1227,8 +1398,8 @@ CITATION
 Lobo, I. (2026).
 smorfs_amps_predict: A reproducible, HPC-native pipeline for
 quality control, metagenome assembly, smORF discovery,
-AMP prediction, and genomic-context refinement
-of Nanopore shotgun data.
+AMP prediction, genomic-context refinement, global CDS annotation,
+abundance analysis, and cross-layer functional network construction
 AY:RΔ — data and discovery in flow.
 </pre>
 
