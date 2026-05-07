@@ -164,15 +164,145 @@ plot_flagstat_stripchart <- function(summary_dt, out_png, out_pdf = NULL, width 
   invisible(p)
 }
 
+plot_flagstat_infographic <- function(
+    summary_dt,
+    out_png,
+    out_pdf = NULL,
+    metric_to_plot = "mapped",
+    width = 10,
+    height = 5.5) {
+  
+  dir_create(dirname(out_png))
+  if (!is.null(out_pdf)) dir_create(dirname(out_pdf))
+  
+  dt <- copy(summary_dt)
+  dt <- dt[metric == metric_to_plot]
+  dt <- dt[!is.na(pct)]
+  
+  env_levels <- levels(dt$environment)
+  dt[, environment := factor(environment, levels = rev(env_levels))]
+  
+  env_stats <- dt[, .(
+    median_pct = median(pct, na.rm = TRUE),
+    n = .N
+  ), by = environment]
+  
+  global_median <- median(dt$pct, na.rm = TRUE)
+  
+  label_dt <- copy(env_stats)
+  label_dt[, label := sprintf("Median: %.1f%%\nn = %d", median_pct, n)]
+  
+  env_colors <- c(
+    campina  = "#FFCC00",
+    uniforme = "#99CC33",
+    riparia  = "#3399FF",
+    peneira  = "#FF9900"
+  )
+  
+  p <- ggplot(dt, aes(x = pct, y = environment, color = environment)) +
+    geom_vline(
+      xintercept = global_median,
+      linetype = "dashed",
+      color = "grey45",
+      linewidth = 0.7
+    ) +
+    geom_segment(
+      data = env_stats,
+      aes(
+        x = global_median,
+        xend = median_pct,
+        y = environment,
+        yend = environment,
+        color = environment
+      ),
+      linewidth = 1.1,
+      inherit.aes = FALSE
+    ) +
+    geom_jitter(
+      height = 0.08,
+      width = 0,
+      alpha = 0.45,
+      size = 3.5
+    ) +
+    geom_point(
+      data = env_stats,
+      aes(x = median_pct, y = environment, color = environment),
+      size = 6,
+      inherit.aes = FALSE
+    ) +
+    geom_text(
+      data = label_dt,
+      aes(
+        x = 102,
+        y = environment,
+        label = label
+      ),
+      hjust = 0,
+      size = 4,
+      color = "black",
+      #fontface = "bold",
+      inherit.aes = FALSE
+    ) +
+    # annotate(
+    #   "text",
+    #   x = global_median,
+    #   y = 0.45,
+    #   #label = sprintf("Global median\n%.1f%%", global_median),
+    #   color = "grey35",
+    #   size = 3.5
+    # ) +
+    scale_x_continuous(
+      limits = c(0, 115),
+      breaks = seq(0, 100, 25),
+      expand = expansion(mult = c(0.01, 0.02))
+    ) +
+    scale_color_manual(values = env_colors) +
+    labs(
+      x = "Mapped reads (%)",
+      y = NULL,
+      title = sprintf("%s reads by environment", metric_to_plot)#,
+      #subtitle = "Each dot = one library. Larger dot = median per environment.",
+      #caption = "Small dots = libraries | Larger dots = environment medians | Dashed vertical line = global median"
+    ) +
+    theme_bw(base_size = 13) +
+    theme(
+      legend.position = "none",
+      panel.grid.major.y = element_line(color = "grey85", linetype = "dashed"),
+      panel.grid.minor = element_blank(),
+      panel.border = element_blank(),
+      axis.line.x = element_line(color = "black"),
+      axis.ticks.y = element_blank(),
+      plot.title = element_text(face = "bold", size = 18),
+      plot.subtitle = element_text(size = 12),
+      plot.caption = element_text(size = 10, color = "grey35"),
+      axis.text.y = element_text(size = 13),
+      axis.text.x = element_text(size = 11)
+    )
+  
+  ggsave(out_png, p, width = width+1, height = height, dpi = 300)
+  if (!is.null(out_pdf)) ggsave(out_pdf, p, width = width, height = height)
+  
+  invisible(p)
+}
+
 run_flagstat_step <- function(stats_root, outdir, envs) {
   dir_create(outdir)
   dt <- collect_flagstat_summary(stats_root = stats_root, envs = envs)
   fwrite(dt, file.path(outdir, "mapping_flagstat_summary.tsv"), sep = "\t")
+  
   plot_flagstat_stripchart(
     dt,
     out_png = file.path(outdir, "mapping_flagstat_stripchart.png"),
     out_pdf = file.path(outdir, "mapping_flagstat_stripchart.pdf")
   )
+  
+  plot_flagstat_infographic(
+    dt,
+    out_png = file.path(outdir, "mapping_flagstat_infographic.png"),
+    out_pdf = file.path(outdir, "mapping_flagstat_infographic.pdf"),
+    metric_to_plot = "mapped"
+  )
+  
   log_msg("Flagstat summary written to %s", file.path(outdir, "mapping_flagstat_summary.tsv"))
 }
 
